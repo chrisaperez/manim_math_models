@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GD Convergence &amp; the Curvature Cliff</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>Gradient Descent &amp; the Curvature Cliff</h1>
+    <p class="sub">
+      Every eigenmode of the Hessian contracts by <span class="math">(1 − αλ<sub>i</sub>)</span> per step —
+      GD converges iff <span class="math">α &lt; 2/β<sub>max</sub></span>. Drag the start point, then push α past the red tick.
+    </p>
+    <p class="source">CS229 PS1.1 · CS205L HW9.5 &nbsp;|&nbsp; J(θ) = ½ θᵀAθ, &nbsp;θ<sub>t+1</sub> = (I − αA)θ<sub>t</sub></p>
+  </header>
+
+  <div class="layout">
+    <div class="stack">
+      <div class="panel" id="contour-panel">
+        <h2>Loss contours &amp; trajectory <span style="float:right" id="status"></span></h2>
+        <canvas class="fig" id="contour" style="height:430px"></canvas>
+        <div class="pills" style="margin-top:10px">
+          <span class="pill">β<sub>max</sub> = <b id="p-bmax"></b></span>
+          <span class="pill">cliff&nbsp; 2/β<sub>max</sub> = <b id="p-crit"></b></span>
+          <span class="pill">κ = <b id="p-kappa"></b></span>
+          <span class="pill">worst rate&nbsp; max|1−αλ<sub>i</sub>| = <b id="p-rate"></b></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Per-mode error &nbsp;<span class="f">|c<sub>i</sub>(t)| = |1−αλ<sub>i</sub>|<sup>t</sup>·|c<sub>i</sub>(0)|</span> &nbsp;(log scale)</h2>
+        <canvas class="fig" id="modes" style="height:230px"></canvas>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <h2>Controls</h2>
+        <div id="s-alpha"></div>
+        <div id="s-kappa"></div>
+        <div id="s-angle"></div>
+        <div style="display:flex; gap:8px; margin-top:18px">
+          <button class="btn primary" id="btn-anim">▶ animate steps</button>
+          <button class="btn" id="btn-reset">reset</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Contraction factors &nbsp;<span class="f">f<sub>i</sub> = 1 − αλ<sub>i</sub></span></h2>
+        <div id="gauges"></div>
+        <p class="footnote">A mode diverges the instant its dot enters the red zone
+          (|f| &gt; 1). The steep mode — largest λ — always gets there first:
+          that is the whole theorem.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Why the slow mode still hurts</h2>
+        <p class="footnote" style="margin-top:0">
+          Below the cliff, the error shrinks like max|1−αλ<sub>i</sub>|<sup>t</sup>.
+          The best you can do is α* = 2/(λ<sub>min</sub>+λ<sub>max</sub>) (green tick),
+          giving rate (κ−1)/(κ+1) — ill-conditioned bowls are slow even when stable.
+          For linear regression H = ⅟ₙ XᵀX: the data itself sets your budget (PS1 1(e)).
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, clamp, fmt, makeFig, slider, tooltip, player, V2 } = MM;
+
+  // ---------------------------------------------------------------- model
+  const LMAX = 4.0;                     // fixed: the cliff stays at alpha = 0.5
+  const state = {
+    alpha: 0.30,
+    kappa: 8,
+    angle: (30 * Math.PI) / 180,
+    theta0: null,                        // set from eigen coords below
+    steps: 30,
+    tAnim: 30,                           // walker position (in steps)
+  };
+
+  const lambdas = () => [LMAX / state.kappa, LMAX];
+  const Q = () => V2.rot(state.angle);
+  const setTheta0FromEigen = (c) => { state.theta0 = V2.mul(Q(), c); };
+  setTheta0FromEigen([2.6, 1.0]);
+
+  // c_i(t) closed form; path in standard coordinates
+  function eigenPath() {
+    const [l1, l2] = lambdas();
+    const c0 = V2.mulT(Q(), state.theta0);
+    const f = [1 - state.alpha * l1, 1 - state.alpha * l2];
+    const path = [];
+    for (let t = 0; t <= state.steps; t++) {
+      path.push([c0[0] * Math.pow(f[0], t), c0[1] * Math.pow(f[1], t)]);
+    }
+    return { path, f, c0 };
+  }
+  const toStandard = (c) => V2.mul(Q(), c);
+  const worstRate = () => Math.max(...eigenPath().f.map(Math.abs));
+  const CRIT = 2 / LMAX;
+
+  // ---------------------------------------------------------------- contour figure
+  const R = 3.6; // world half-range shown
+  let dragging = false;
+
+  const contourPanel = document.getElementById("contour-panel");
+  const contourFig = makeFig(document.getElementById("contour"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel;
+    ctx.fillRect(0, 0, w, h);
+    const s = Math.min(w, h) / (2 * R);
+    const X = (p) => [w / 2 + p[0] * s, h / 2 - p[1] * s];
+
+    // faint grid + axes
+    ctx.strokeStyle = C.grid;
+    ctx.lineWidth = 1;
+    for (let g = -3; g <= 3; g++) {
+      ctx.beginPath(); ctx.moveTo(...X([g, -R])); ctx.lineTo(...X([g, R])); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(...X([-R, g])); ctx.lineTo(...X([R, g])); ctx.stroke();
+    }
+
+    // contour ellipses of J at fixed levels
+    const [l1, l2] = lambdas();
+    ctx.lineWidth = 1.5;
+    [0.35, 1.0, 2.2, 4.0, 6.5].forEach((L, i) => {
+      ctx.strokeStyle = C.blue;
+      ctx.globalAlpha = 0.85 - 0.13 * i;
+      ctx.beginPath();
+      for (let k = 0; k <= 120; k++) {
+        const phi = (k / 120) * 2 * Math.PI;
+        const c = [Math.sqrt(2 * L / l1) * Math.cos(phi), Math.sqrt(2 * L / l2) * Math.sin(phi)];
+        const p = X(toStandard(c));
+        k ? ctx.lineTo(...p) : ctx.moveTo(...p);
+      }
+      ctx.closePath(); ctx.stroke();
+    });
+    ctx.globalAlpha = 1;
+
+    // eigenvector directions (dashed)
+    ctx.setLineDash([5, 6]);
+    ctx.strokeStyle = C.ink3;
+    for (const c of [[R * 1.4, 0], [0, R * 1.4]]) {
+      const p = toStandard(c);
+      ctx.beginPath(); ctx.moveTo(...X([-p[0], -p[1]])); ctx.lineTo(...X(p)); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // trajectory (clip when diverging)
+    const { path } = eigenPath();
+    const diverging = worstRate() >= 1;
+    ctx.strokeStyle = diverging ? C.red : C.yellow;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    let started = false;
+    for (const c of path) {
+      if (V2.norm(c) > R * 2.6) break;
+      const p = X(toStandard(c));
+      started ? ctx.lineTo(...p) : ctx.moveTo(...p);
+      started = true;
+    }
+    ctx.stroke();
+
+    // iterate dots
+    ctx.fillStyle = ctx.strokeStyle;
+    for (const c of path) {
+      if (V2.norm(c) > R * 2.6) break;
+      const p = X(toStandard(c));
+      ctx.beginPath(); ctx.arc(p[0], p[1], 2.5, 0, 7); ctx.fill();
+    }
+
+    // walker (animated current iterate)
+    const idx = clamp(Math.floor(state.tAnim), 0, path.length - 1);
+    if (V2.norm(path[idx]) <= R * 2.6) {
+      const p = X(toStandard(path[idx]));
+      ctx.fillStyle = C.ink;
+      ctx.beginPath(); ctx.arc(p[0], p[1], 5, 0, 7); ctx.fill();
+    }
+
+    // start point handle
+    const p0 = X(state.theta0);
+    ctx.fillStyle = C.yellow;
+    ctx.strokeStyle = C.bg;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p0[0], p0[1], 7, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = C.ink2;
+    ctx.font = "12px " + getComputedStyle(document.body).getPropertyValue("--mono");
+    ctx.fillText("θ₀ (drag)", p0[0] + 10, p0[1] - 8);
+
+    // minimum marker
+    const m = X([0, 0]);
+    ctx.fillStyle = C.green;
+    ctx.beginPath(); ctx.arc(m[0], m[1], 3.5, 0, 7); ctx.fill();
+  });
+
+  // drag the start point
+  const cvs = contourFig.canvas;
+  function eventWorld(e) {
+    const r = cvs.getBoundingClientRect();
+    const s = Math.min(r.width, contourFig.h) / (2 * R);
+    return [(e.clientX - r.left - r.width / 2) / s, -(e.clientY - r.top - contourFig.h / 2) / s];
+  }
+  cvs.addEventListener("pointerdown", (e) => {
+    const wpt = eventWorld(e);
+    if (Math.hypot(wpt[0] - state.theta0[0], wpt[1] - state.theta0[1]) < 0.45) {
+      dragging = true;
+      cvs.setPointerCapture(e.pointerId);
+    }
+  });
+  cvs.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const wpt = eventWorld(e);
+    state.theta0 = [clamp(wpt[0], -R, R), clamp(wpt[1], -R, R)];
+    refresh();
+  });
+  cvs.addEventListener("pointerup", () => { dragging = false; });
+
+  // ---------------------------------------------------------------- modes figure
+  const YLO = 1e-4, YHI = 1e2;
+  let hoverT = null;
+
+  const modesFig = makeFig(document.getElementById("modes"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel;
+    ctx.fillRect(0, 0, w, h);
+    const padL = 46, padR = 118, padT = 10, padB = 22;
+    const xw = w - padL - padR, yh = h - padT - padB;
+    const xAt = (t) => padL + (t / state.steps) * xw;
+    const yAt = (v) => {
+      const lv = Math.log10(clamp(v, YLO, YHI));
+      return padT + (Math.log10(YHI) - lv) / (Math.log10(YHI) - Math.log10(YLO)) * yh;
+    };
+
+    // decade grid
+    ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+    ctx.fillStyle = C.ink3;
+    ctx.font = "10.5px " + getComputedStyle(document.body).getPropertyValue("--mono");
+    for (let d = -4; d <= 2; d += 2) {
+      const y = yAt(10 ** d);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+      ctx.fillText("1e" + d, 8, y + 3.5);
+    }
+    // divergence line |c| = |c(0)| reference omitted; x labels
+    for (let t = 0; t <= state.steps; t += 10) {
+      ctx.fillText("t=" + t, xAt(t) - 8, h - 7);
+    }
+
+    const { path, f, c0 } = eigenPath();
+    const [l1, l2] = lambdas();
+    const series = [
+      { name: `mode 1  λ=${fmt(l1, 2)}`, color: C.teal, i: 0 },
+      { name: `mode 2  λ=${fmt(l2, 2)}`, color: C.yellow, i: 1 },
+    ];
+    for (const sr of series) {
+      ctx.strokeStyle = sr.color; ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let t = 0; t <= state.steps; t++) {
+        const v = Math.abs(path[t][sr.i]);
+        const p = [xAt(t), yAt(Math.max(v, YLO))];
+        t ? ctx.lineTo(...p) : ctx.moveTo(...p);
+      }
+      ctx.stroke();
+      // direct label at line end (identity never color-alone)
+      const endV = Math.abs(path[state.steps][sr.i]);
+      ctx.fillStyle = sr.color;
+      ctx.fillText(sr.name + `  f=${fmt(f[sr.i], 2)}`, w - padR + 6, yAt(Math.max(endV, YLO)) + 3.5);
+    }
+
+    // hover crosshair
+    if (hoverT !== null) {
+      const x = xAt(hoverT);
+      ctx.strokeStyle = C.ink3; ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, h - padB); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  });
+
+  const modesTip = tooltip(document.getElementById("modes").parentElement);
+  document.getElementById("modes").addEventListener("pointermove", (e) => {
+    const r = modesFig.canvas.getBoundingClientRect();
+    const padL = 46, padR = 118;
+    const t = Math.round(((e.clientX - r.left - padL) / (r.width - padL - padR)) * state.steps);
+    if (t < 0 || t > state.steps) { hoverT = null; modesTip.hide(); modesFig.invalidate(); return; }
+    hoverT = t;
+    const { path } = eigenPath();
+    modesTip.show(e.clientX - r.left, e.clientY - r.top,
+      `t = ${t}<br>|c₁| = ${fmt(Math.abs(path[t][0]), 3)}<br>|c₂| = ${fmt(Math.abs(path[t][1]), 3)}`);
+    modesFig.invalidate();
+  });
+  document.getElementById("modes").addEventListener("pointerleave", () => {
+    hoverT = null; modesTip.hide(); modesFig.invalidate();
+  });
+
+  // ---------------------------------------------------------------- gauges
+  const gaugeRoot = document.getElementById("gauges");
+  const G_LO = -1.6, G_HI = 1.1;
+  const gpos = (f) => `${((clamp(f, G_LO, G_HI) - G_LO) / (G_HI - G_LO)) * 100}%`;
+  gaugeRoot.innerHTML = [0, 1].map((i) => `
+    <div class="gauge" id="g${i}">
+      <div class="name" style="color:${[C.teal, C.yellow][i]}">f<sub>${i + 1}</sub> = 1 − αλ<sub>${i + 1}</sub> = <span class="fval"></span></div>
+      <div class="rail">
+        <span class="zone" style="left:0; width:${gpos(-1)}"></span>
+        <span class="zone" style="left:${gpos(1)}; right:0"></span>
+        <span class="mark danger" style="left:${gpos(-1)}"></span>
+        <span class="mark" style="left:${gpos(0)}"></span>
+        <span class="mark danger" style="left:${gpos(1)}"></span>
+        <span class="dot" style="background:${[C.teal, C.yellow][i]}"></span>
+      </div>
+      <div class="scale"><span>−1.6</span><span>−1</span><span style="margin-left:-1em">0</span><span>+1</span></div>
+    </div>`).join("");
+
+  // ---------------------------------------------------------------- controls
+  const sAlpha = slider({
+    el: "#s-alpha", label: "learning rate α", min: 0.02, max: 0.68, step: 0.005,
+    value: state.alpha, format: (v) => fmt(v, 3),
+    ticks: [{ at: CRIT, color: C.red, label: "2/βmax" }],
+    onChange: (v) => { state.alpha = v; refresh(); },
+  });
+  // dynamic green tick for alpha* = 2/(lmin+lmax)
+  const alphaWrap = document.querySelector("#s-alpha .slider-wrap");
+  const optTick = document.createElement("span");
+  optTick.className = "tick"; optTick.style.background = C.green;
+  const optLab = document.createElement("span");
+  optLab.className = "tick-label"; optLab.style.color = C.green; optLab.style.top = "-12px";
+  optLab.textContent = "α*";
+  alphaWrap.append(optTick, optLab);
+
+  slider({
+    el: "#s-kappa", label: "condition number κ", min: 1, max: 40, step: 0.5,
+    value: state.kappa, format: (v) => fmt(v, 1),
+    onChange: (v) => { state.kappa = v; refresh(); },
+  });
+  slider({
+    el: "#s-angle", label: "eigenbasis rotation", min: 0, max: 90, step: 1,
+    value: 30, format: (v) => v + "°",
+    onChange: (v) => {
+      const c = V2.mulT(Q(), state.theta0);     // keep eigen position fixed
+      state.angle = (v * Math.PI) / 180;
+      setTheta0FromEigen(c);
+      refresh();
+    },
+  });
+
+  // walker animation
+  const anim = player((dt) => {
+    state.tAnim += dt * 7;
+    if (state.tAnim > state.steps + 3) state.tAnim = 0;
+    contourFig.invalidate();
+  });
+  const btnAnim = document.getElementById("btn-anim");
+  btnAnim.addEventListener("click", () => {
+    anim.toggle();
+    btnAnim.textContent = anim.running ? "⏸ pause" : "▶ animate steps";
+    if (!anim.running) { state.tAnim = state.steps; contourFig.invalidate(); }
+  });
+  document.getElementById("btn-reset").addEventListener("click", () => {
+    state.kappa = 8; state.angle = Math.PI / 6;
+    setTheta0FromEigen([2.6, 1.0]);
+    sAlpha.set(0.30, false); state.alpha = 0.30;
+    document.querySelector("#s-kappa input").value = 8;
+    document.querySelector("#s-angle input").value = 30;
+    document.querySelector("#s-kappa .val").textContent = "8.0";
+    document.querySelector("#s-angle .val").textContent = "30°";
+    refresh();
+  });
+
+  // ---------------------------------------------------------------- refresh
+  const statusEl = document.getElementById("status");
+  function refresh() {
+    const [l1, l2] = lambdas();
+    const { f } = eigenPath();
+    const rate = Math.max(Math.abs(f[0]), Math.abs(f[1]));
+    const alphaOpt = 2 / (l1 + l2);
+
+    // status + alarm styling
+    const ok = rate < 1;
+    statusEl.className = "status " + (ok ? "ok" : "bad");
+    statusEl.textContent = ok ? `converges — rate ${fmt(rate, 3)}` : `DIVERGES — rate ${fmt(rate, 3)}`;
+    contourPanel.classList.toggle("alarm", !ok);
+
+    // pills
+    document.getElementById("p-bmax").textContent = fmt(l2, 1);
+    document.getElementById("p-crit").textContent = fmt(CRIT, 3);
+    document.getElementById("p-kappa").textContent = fmt(state.kappa, 1);
+    document.getElementById("p-rate").textContent = fmt(rate, 3);
+
+    // gauges
+    [0, 1].forEach((i) => {
+      const g = document.getElementById("g" + i);
+      g.querySelector(".fval").textContent = fmt(f[i], 3);
+      const dot = g.querySelector(".dot");
+      dot.style.left = gpos(f[i]);
+      dot.style.background = Math.abs(f[i]) >= 1 ? C.red : [C.teal, C.yellow][i];
+    });
+
+    // moving optimal-alpha tick
+    const frac = (alphaOpt - 0.02) / (0.68 - 0.02);
+    optTick.style.left = `calc(8px + ${frac} * (100% - 16px))`;
+    optLab.style.left = `calc(8px + ${frac} * (100% - 16px))`;
+
+    contourFig.invalidate();
+    modesFig.invalidate();
+  }
+
+  refresh();
+})();
+</script>
+</body>
+</html>

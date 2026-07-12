@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KL Divergence &amp; MLE</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>KL Divergence &amp; Maximum Likelihood</h1>
+    <p class="sub">
+      Left: sculpt two beliefs and watch both directions of KL (they disagree — it's not a distance).
+      Right: draw samples, sweep the model θ, and see the KL curve and the log-likelihood curve
+      be the <em>same curve, mirrored</em> — with one shared optimum.
+    </p>
+    <p class="source">CS229 PS4.3 &nbsp;|&nbsp; KL(P‖Q) = Σ P log(P/Q) ≥ 0; &nbsp;KL(P̂‖P<sub>θ</sub>) = −H(P̂) − (1/n)Σ log P<sub>θ</sub>(x⁽ⁱ⁾)</p>
+  </header>
+
+  <div class="layout" style="grid-template-columns: 1fr 1fr;">
+    <div class="panel">
+      <h2>Two beliefs <span style="float:right" id="kl-read"></span></h2>
+      <canvas class="fig" id="beliefs" style="height:300px"></canvas>
+      <p class="footnote">
+        Drag bars vertically to reshape P (teal) or Q (yellow); each stays normalized.
+        Notice KL(P‖Q) explodes when P puts mass where Q has almost none — believing
+        the impossible is expensive; ignoring the possible is cheaper.
+      </p>
+      <button class="btn" id="btn-match">set Q = P (both KL → 0)</button>
+    </div>
+
+    <div class="panel">
+      <h2>The MLE bridge <span style="float:right" id="mle-read"></span></h2>
+      <canvas class="fig" id="bridge" style="height:300px"></canvas>
+      <div id="s-theta"></div>
+      <div style="display:flex; gap:8px; margin-top:8px; align-items:center">
+        <button class="btn primary" id="btn-sample">draw 100 more samples</button>
+        <button class="btn" id="btn-clear">restart (n = 25)</button>
+        <button class="btn" id="btn-snap">snap θ to MLE</button>
+      </div>
+      <p class="footnote">
+        Hidden truth: θ* = 0.62. The red KL(P̂‖P<sub>θ</sub>) and green avg-loglik curves are
+        vertical mirror images (they differ by the constant −H(P̂)), so the argmin and argmax
+        coincide — at exactly the sample mean / 5. More samples pull that point toward θ*.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, clamp, fmt, makeFig, slider } = MM;
+
+  // ------------------------------------------------------------- beliefs
+  const K = 6;
+  let Pd = [0.30, 0.25, 0.18, 0.12, 0.09, 0.06];
+  let Qd = [0.06, 0.09, 0.12, 0.18, 0.25, 0.30];
+
+  const klOf = (p, q) => p.reduce((t, pi, i) => pi > 0 ? t + pi * Math.log(pi / Math.max(q[i], 1e-9)) : t, 0);
+
+  const BARS = [];   // hit regions {x, w, dist, i}
+  const beliefsFig = makeFig(document.getElementById("beliefs"), (ctx, W, H) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, W, H);
+    BARS.length = 0;
+    const groups = [[Pd, C.teal, "P", 30], [Qd, C.yellow, "Q", W / 2 + 14]];
+    const bw = (W / 2 - 60) / K;
+    for (const [dist, col, name, x0] of groups) {
+      ctx.fillStyle = col;
+      ctx.font = "italic 16px Times New Roman";
+      ctx.fillText(name, x0, 22);
+      dist.forEach((p, i) => {
+        const h = p * (H - 70);
+        const x = x0 + i * bw;
+        ctx.globalAlpha = 0.75;
+        ctx.fillRect(x, H - 26 - h, bw - 5, h);
+        ctx.globalAlpha = 1;
+        BARS.push({ x, w: bw - 5, dist, i });
+        ctx.fillStyle = C.ink3;
+        ctx.font = "12px Times New Roman";
+        ctx.fillText(i + 1, x + bw / 2 - 6, H - 10);
+        ctx.fillStyle = col;
+      });
+    }
+  });
+  let dragBar = null;
+  const bcvs = document.getElementById("beliefs");
+  function dragTo(e) {
+    if (!dragBar) return;
+    const r = bcvs.getBoundingClientRect();
+    const H = r.height;
+    const v = clamp((H - 26 - (e.clientY - r.top)) / (H - 70), 0.01, 1);
+    dragBar.dist[dragBar.i] = v;
+    const s = dragBar.dist.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < K; i++) dragBar.dist[i] /= s;
+    refreshBeliefs();
+  }
+  bcvs.addEventListener("pointerdown", (e) => {
+    const r = bcvs.getBoundingClientRect();
+    const mx = e.clientX - r.left;
+    dragBar = BARS.find((b) => mx >= b.x && mx <= b.x + b.w) || null;
+    if (dragBar) { bcvs.setPointerCapture(e.pointerId); dragTo(e); }
+  });
+  bcvs.addEventListener("pointermove", dragTo);
+  bcvs.addEventListener("pointerup", () => { dragBar = null; });
+
+  function refreshBeliefs() {
+    const a = klOf(Pd, Qd), b = klOf(Qd, Pd);
+    const eq = a < 1e-4 && b < 1e-4;
+    document.getElementById("kl-read").innerHTML =
+      `<span class="pill" style="${eq ? "color:" + C.green : ""}">KL(P‖Q) = <b>${fmt(a, 3)}</b> · KL(Q‖P) = <b>${fmt(b, 3)}</b>${eq ? " · P = Q ✓" : ""}</span>`;
+    beliefsFig.invalidate();
+  }
+  document.getElementById("btn-match").addEventListener("click", () => {
+    Qd = Pd.slice(); refreshBeliefs();
+  });
+
+  // ------------------------------------------------------------- MLE bridge
+  const N = 5, THETA_TRUE = 0.62;
+  let counts = new Array(N + 1).fill(0);
+  let nSamples = 0;
+  let theta = 0.3;
+  let seed = 12;
+  const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+
+  function drawSamples(n) {
+    for (let s = 0; s < n; s++) {
+      let k = 0;
+      for (let i = 0; i < N; i++) if (rand() < THETA_TRUE) k++;
+      counts[k]++;
+    }
+    nSamples += n;
+  }
+  const comb = [1, 5, 10, 10, 5, 1];
+  const pmf = (t) => comb.map((c, k) => c * t ** k * (1 - t) ** (N - k));
+  const pHat = () => counts.map((c) => c / Math.max(nSamples, 1));
+  const klTheta = (t) => klOf(pHat(), pmf(t));
+  const loglik = (t) => {
+    const ph = pHat(), pm = pmf(t);
+    return ph.reduce((s, p, k) => p > 0 ? s + p * Math.log(pm[k]) : s, 0);
+  };
+  const mle = () => counts.reduce((s, c, k) => s + c * k, 0) / (nSamples * N);
+
+  const bridgeFig = makeFig(document.getElementById("bridge"), (ctx, W, H) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, W, H);
+    const padL = 152, padR = 20, mid = H * 0.52;
+    // left: histogram + model pmf
+    const ph = pHat(), pm = pmf(theta);
+    const hb = 116, hx = 12, hw = 20;
+    ph.forEach((p, k) => {
+      ctx.fillStyle = "rgba(92,208,179,0.75)";
+      ctx.fillRect(hx + k * hw, H - 40 - p * hb, hw - 5, p * hb);
+      ctx.fillStyle = "rgba(255,211,90,0.95)";
+      ctx.fillRect(hx + k * hw + 5, H - 40 - pm[k] * hb, 7, pm[k] * hb);
+      ctx.fillStyle = C.ink3; ctx.font = "11px Times New Roman";
+      ctx.fillText(k, hx + k * hw + 5, H - 26);
+    });
+    ctx.fillStyle = C.teal; ctx.font = "italic 13px Times New Roman";
+    ctx.fillText("P̂ (teal) vs P_θ (yellow)", 10, H - 8);
+
+    // right: mirrored curves over theta
+    const T = 140;
+    const xAt = (t) => padL + (t - 0.03) / 0.94 * (W - padL - padR);
+    const kls = [], lls = [];
+    let klMax = 0, llMin = 0;
+    for (let i = 0; i <= T; i++) {
+      const t = 0.03 + 0.94 * i / T;
+      const kv = klTheta(t), lv = loglik(t);
+      kls.push([t, kv]); lls.push([t, lv]);
+      klMax = Math.max(klMax, Math.min(kv, 3));
+      llMin = Math.min(llMin, Math.max(lv, -5));
+    }
+    const yK = (v) => mid - 14 - clamp(v, 0, 3) / 3 * (mid - 26);
+    const yL = (v) => mid + 14 + clamp(-v, 0, 5) / 5 * (H - mid - 40);
+    ctx.strokeStyle = C.grid;
+    ctx.beginPath(); ctx.moveTo(padL, mid); ctx.lineTo(W - padR, mid); ctx.stroke();
+    for (const [pts_, col, yFn, tag, ty] of [
+      [kls, C.red, yK, "KL(P̂‖P_θ)", 18],
+      [lls, C.green, yL, "avg log-likelihood", H - 14],
+    ]) {
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath();
+      pts_.forEach(([t, v], i) => {
+        const p = [xAt(t), yFn(v)];
+        i ? ctx.lineTo(...p) : ctx.moveTo(...p);
+      });
+      ctx.stroke();
+      ctx.fillStyle = col; ctx.font = "italic 13px Times New Roman";
+      ctx.fillText(tag, padL + 6, ty);
+    }
+    // theta marker + mle marker
+    ctx.strokeStyle = C.yellow; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(xAt(theta), 10); ctx.lineTo(xAt(theta), H - 24); ctx.stroke();
+    ctx.setLineDash([]);
+    const m = mle();
+    ctx.fillStyle = C.ink;
+    ctx.beginPath(); ctx.arc(xAt(m), yK(klTheta(m)), 4, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(xAt(m), yL(loglik(m)), 4, 0, 7); ctx.fill();
+    ctx.font = "italic 12px Times New Roman";
+    ctx.fillText("shared optimum", xAt(m) - 44, yK(klTheta(m)) - 10);
+    ctx.fillStyle = C.ink3;
+    ctx.fillText("θ →", W - 40, mid - 6);
+  });
+
+  function refreshMle() {
+    document.getElementById("mle-read").innerHTML =
+      `<span class="pill">n = <b>${nSamples}</b> · KL = <b>${fmt(klTheta(theta), 3)}</b> · loglik = <b>${fmt(loglik(theta), 3)}</b> · MLE θ̂ = <b>${fmt(mle(), 3)}</b></span>`;
+    bridgeFig.invalidate();
+  }
+  const sTheta = slider({
+    el: "#s-theta", label: "model parameter θ", min: 0.03, max: 0.97, step: 0.005,
+    value: theta, format: (v) => fmt(v, 3),
+    ticks: [{ at: THETA_TRUE, color: C.ink3, label: "θ*" }],
+    onChange: (v) => { theta = v; refreshMle(); },
+  });
+  document.getElementById("btn-sample").addEventListener("click", () => { drawSamples(100); refreshMle(); });
+  document.getElementById("btn-clear").addEventListener("click", () => {
+    counts = new Array(N + 1).fill(0); nSamples = 0; drawSamples(25); refreshMle();
+  });
+  document.getElementById("btn-snap").addEventListener("click", () => { sTheta.set(mle()); });
+
+  drawSamples(25);
+  refreshBeliefs();
+  refreshMle();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backpropagation, Batched</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>Backpropagation, Batched</h1>
+    <p class="sub">
+      A 2→3→1 network trained live in your browser. Hover any weight to read its gradient;
+      click it to <em>verify</em> the gradient against a real nudge — the chain rule, audited.
+    </p>
+    <p class="source">CS229 PS2.4 &nbsp;|&nbsp; ∂L/∂X = (∂L/∂Z)Wᵀ, &nbsp;∂L/∂W = Xᵀ(∂L/∂Z), &nbsp;∂L/∂Z = G ⊙ σ′(Z)</p>
+  </header>
+
+  <div class="layout">
+    <div class="stack">
+      <div class="panel">
+        <h2>Data &amp; decision boundary <span style="float:right" id="loss-read"></span></h2>
+        <canvas class="fig" id="plane" style="height:400px"></canvas>
+      </div>
+      <div class="panel">
+        <h2>Weights &amp; their gradients &nbsp;<span class="f">(hover a cell; click to nudge-test)</span></h2>
+        <canvas class="fig" id="mats" style="height:270px"></canvas>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <h2>Training</h2>
+        <div id="s-lr"></div>
+        <div style="display:flex; gap:8px; margin-top:16px; flex-wrap:wrap">
+          <button class="btn primary" id="btn-train">▶ train</button>
+          <button class="btn" id="btn-step">1 step</button>
+          <button class="btn" id="btn-reset">reset</button>
+        </div>
+        <canvas class="fig" id="losschart" style="height:120px; margin-top:14px"></canvas>
+      </div>
+
+      <div class="panel">
+        <h2>Nudge test &nbsp;<span class="f">ΔL ≈ (∂L/∂w)·ε</span></h2>
+        <div id="nudge" class="footnote" style="margin-top:0">
+          Click a weight cell. We nudge it by ε = 10⁻³, re-run the whole batch,
+          and compare the true ΔL with the backprop prediction.
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>The three identities</h2>
+        <p class="footnote" style="margin-top:0">
+          Forward: Z = XW + b, A = σ(Z). Backward, given G = ∂L/∂A:<br><br>
+          ∂L/∂Z = G ⊙ σ′(Z) — saturation kills gradient<br>
+          ∂L/∂X = (∂L/∂Z) Wᵀ — <em>(n×k)(k×d) → (n×d)</em><br>
+          ∂L/∂W = Xᵀ (∂L/∂Z) — a sum of rank-1 votes, one per example
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, clamp, fmt, makeFig, slider, tooltip, player } = MM;
+
+  // ---------------------------------------------------------- tiny net (2-3-1)
+  // Mirrors core/sims/backprop.py: Z1=XW1+b1, A1=s(Z1), Z2=A1W2+b2, yhat=s(Z2),
+  // L = (1/2n)||yhat - y||^2; dW2 = A1' dZ2, dZ1 = (dZ2 W2') * s'(Z1), dW1 = X' dZ1.
+  const sig = (z) => 1 / (1 + Math.exp(-z));
+  const sigp = (z) => { const s = sig(z); return s * (1 - s); };
+
+  // XOR-ish data: 4 clusters, 6 points each
+  const DATA = [];
+  {
+    let seed = 42;
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (const [cx, cy, lab] of [[-1.4, -1.4, 0], [1.4, 1.4, 0], [-1.4, 1.4, 1], [1.4, -1.4, 1]]) {
+      for (let i = 0; i < 6; i++) {
+        DATA.push({ x: cx + (rand() - 0.5) * 1.1, y: cy + (rand() - 0.5) * 1.1, lab });
+      }
+    }
+  }
+  const N = DATA.length;
+
+  let W1, B1, W2, B2, lossHist;
+  function init() {
+    let seed = 7;
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5;
+    W1 = [[rand() * 2, rand() * 2, rand() * 2], [rand() * 2, rand() * 2, rand() * 2]];
+    B1 = [rand(), rand(), rand()];
+    W2 = [[rand() * 2], [rand() * 2], [rand() * 2]];
+    B2 = [rand()];
+    lossHist = [];
+  }
+
+  function forwardPoint(x, y) {
+    const z1 = [0, 1, 2].map((j) => x * W1[0][j] + y * W1[1][j] + B1[j]);
+    const a1 = z1.map(sig);
+    const z2 = a1[0] * W2[0][0] + a1[1] * W2[1][0] + a1[2] * W2[2][0] + B2[0];
+    return { z1, a1, z2, yhat: sig(z2) };
+  }
+
+  function batchLoss() {
+    let L = 0;
+    for (const p of DATA) L += (forwardPoint(p.x, p.y).yhat - p.lab) ** 2;
+    return L / (2 * N);
+  }
+
+  // full-batch backward pass; returns gradients matching the identities
+  function backward() {
+    const dW1 = [[0, 0, 0], [0, 0, 0]], dB1 = [0, 0, 0];
+    const dW2 = [[0], [0], [0]], dB2 = [0];
+    for (const p of DATA) {
+      const f = forwardPoint(p.x, p.y);
+      const G = (f.yhat - p.lab) / N;              // dL/dyhat
+      const dZ2 = G * sigp(f.z2);                  // Hadamard gate, layer 2
+      for (let j = 0; j < 3; j++) {
+        dW2[j][0] += f.a1[j] * dZ2;                // A1^T dZ2 (rank-1 votes)
+        const dA1j = dZ2 * W2[j][0];               // dZ2 W2^T
+        const dZ1j = dA1j * sigp(f.z1[j]);         // gate, layer 1
+        dW1[0][j] += p.x * dZ1j;                   // X^T dZ1
+        dW1[1][j] += p.y * dZ1j;
+        dB1[j] += dZ1j;
+      }
+      dB2[0] += dZ2;
+    }
+    return { dW1, dB1, dW2, dB2 };
+  }
+
+  function step(lr) {
+    const g = backward();
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) W1[i][j] -= lr * g.dW1[i][j];
+    for (let j = 0; j < 3; j++) { B1[j] -= lr * g.dB1[j]; W2[j][0] -= lr * g.dW2[j][0]; }
+    B2[0] -= lr * g.dB2[0];
+    lossHist.push(batchLoss());
+    if (lossHist.length > 4000) lossHist.shift();
+  }
+
+  // ---------------------------------------------------------- plane figure
+  const R = 2.6;
+  const planeFig = makeFig(document.getElementById("plane"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    const s = Math.min(w, h) / (2 * R);
+    const px = (x) => w / 2 + x * s, py = (y) => h / 2 - y * s;
+
+    // decision surface as a coarse grid of translucent cells
+    const G = 46;
+    for (let i = 0; i < G; i++) {
+      for (let j = 0; j < G; j++) {
+        const x = -R + (2 * R * (i + 0.5)) / G, y = -R + (2 * R * (j + 0.5)) / G;
+        const v = forwardPoint(x, y).yhat;
+        ctx.fillStyle = v > 0.5 ? C.yellow : C.blue;
+        ctx.globalAlpha = 0.16 * Math.abs(v - 0.5) * 2;
+        ctx.fillRect(px(x) - (R * s) / G, py(y) - (R * s) / G, (2 * R * s) / G, (2 * R * s) / G);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // data points: class encoded by color AND shape (circle/square)
+    for (const p of DATA) {
+      const X = px(p.x), Y = py(p.y);
+      if (p.lab === 1) {
+        ctx.fillStyle = C.yellow;
+        ctx.fillRect(X - 4.5, Y - 4.5, 9, 9);
+      } else {
+        ctx.fillStyle = C.blue;
+        ctx.beginPath(); ctx.arc(X, Y, 5, 0, 7); ctx.fill();
+      }
+    }
+    // direct labels (identity never color-alone)
+    ctx.font = "italic 13px Times New Roman";
+    ctx.fillStyle = C.yellow; ctx.fillText("class 1 ■", 12, 20);
+    ctx.fillStyle = C.blue;   ctx.fillText("class 0 ●", 12, 38);
+  });
+
+  // ---------------------------------------------------------- matrices figure
+  const CELLS = [];   // clickable regions: {x,y,w,h, layer, i, j}
+  const matsFig = makeFig(document.getElementById("mats"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    CELLS.length = 0;
+    const g = backward();
+
+    const blocks = [
+      { M: W1, dM: g.dW1, name: "W¹ (2×3)", layer: "W1" },
+      { M: g.dW1, dM: null, name: "∂L/∂W¹", layer: null },
+      { M: W2, dM: g.dW2, name: "W² (3×1)", layer: "W2" },
+      { M: g.dW2, dM: null, name: "∂L/∂W²", layer: null },
+    ];
+    const side = 40, gap = 6;
+    let x0 = 24;
+    ctx.textAlign = "left";
+    for (const b of blocks) {
+      const rows = b.M.length, cols = b.M[0].length;
+      const vmax = Math.max(1e-12, ...b.M.flat().map(Math.abs));
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+          const v = b.M[i][j];
+          const X = x0 + j * (side + gap), Y = 46 + i * (side + gap);
+          ctx.fillStyle = v >= 0 ? C.yellow : C.blue;
+          ctx.globalAlpha = 0.12 + 0.8 * Math.abs(v) / vmax;
+          ctx.fillRect(X, Y, side, side);
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = C.grid; ctx.strokeRect(X, Y, side, side);
+          ctx.fillStyle = C.ink;
+          ctx.font = "12px Times New Roman";
+          ctx.fillText(fmt(v, 2), X + 4, Y + side / 2 + 4);
+          if (b.layer) CELLS.push({ x: X, y: Y, w: side, h: side, layer: b.layer, i, j });
+        }
+      }
+      ctx.fillStyle = C.ink2;
+      ctx.font = "italic 14px Times New Roman";
+      ctx.fillText(b.name, x0, 30);
+      x0 += cols * (side + gap) + 34;
+    }
+    ctx.fillStyle = C.ink3;
+    ctx.font = "italic 13px Times New Roman";
+    ctx.fillText("yellow = positive, blue = negative; brightness = |value| within each block", 24, h - 14);
+  });
+
+  const matsTip = tooltip(document.getElementById("mats").parentElement);
+  const matsCvs = document.getElementById("mats");
+  function cellAt(e) {
+    const r = matsCvs.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    return CELLS.find((c) => mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h);
+  }
+  matsCvs.addEventListener("pointermove", (e) => {
+    const c = cellAt(e);
+    if (!c) { matsTip.hide(); return; }
+    const g = backward();
+    const wv = (c.layer === "W1" ? W1 : W2)[c.i][c.j];
+    const gv = (c.layer === "W1" ? g.dW1 : g.dW2)[c.i][c.j];
+    const r = matsCvs.getBoundingClientRect();
+    matsTip.show(e.clientX - r.left, e.clientY - r.top,
+      `${c.layer}[${c.i}][${c.j}] = ${fmt(wv, 4)}<br>∂L/∂w = ${fmt(gv, 6)}`);
+  });
+  matsCvs.addEventListener("pointerleave", () => matsTip.hide());
+
+  // nudge test: predicted vs actual dL for eps perturbation
+  matsCvs.addEventListener("click", (e) => {
+    const c = cellAt(e);
+    if (!c) return;
+    const eps = 1e-3;
+    const M = c.layer === "W1" ? W1 : W2;
+    const g = backward();
+    const grad = (c.layer === "W1" ? g.dW1 : g.dW2)[c.i][c.j];
+    const L0 = batchLoss();
+    M[c.i][c.j] += eps;
+    const L1 = batchLoss();
+    M[c.i][c.j] -= eps;
+    const actual = L1 - L0, predicted = grad * eps;
+    document.getElementById("nudge").innerHTML =
+      `<b>${c.layer}[${c.i}][${c.j}]</b> nudged by ε = 10⁻³:<br><br>` +
+      `predicted ΔL = ∂L/∂w · ε = <span style="color:${C.teal}">${actual === 0 ? 0 : predicted.toExponential(3)}</span><br>` +
+      `actual &nbsp;&nbsp;&nbsp;&nbsp;ΔL (re-ran batch) = <span style="color:${C.yellow}">${actual.toExponential(3)}</span><br><br>` +
+      `agreement: <b style="color:${C.green}">${(100 * (1 - Math.abs(predicted - actual) / Math.max(1e-15, Math.abs(actual)))).toFixed(2)}%</b> — the chain rule holds.`;
+  });
+
+  // ---------------------------------------------------------- loss chart
+  const lossFig = makeFig(document.getElementById("losschart"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    if (lossHist.length < 2) {
+      ctx.fillStyle = C.ink3;
+      ctx.font = "italic 13px Times New Roman";
+      ctx.fillText("loss vs step will draw here", 12, h / 2);
+      return;
+    }
+    const max = Math.max(...lossHist), min = Math.min(...lossHist);
+    ctx.strokeStyle = C.teal; ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    lossHist.forEach((v, i) => {
+      const x = (i / (lossHist.length - 1)) * (w - 60) + 8;
+      const y = h - 18 - ((v - min) / Math.max(1e-12, max - min)) * (h - 34);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.stroke();
+    ctx.fillStyle = C.teal;
+    ctx.font = "12px Times New Roman";
+    ctx.fillText("loss", w - 46, h / 2);
+  });
+
+  // ---------------------------------------------------------- controls
+  const sLr = slider({
+    el: "#s-lr", label: "learning rate", min: 0.1, max: 6, step: 0.1, value: 2.5,
+    format: (v) => fmt(v, 1),
+  });
+
+  function refresh() {
+    document.getElementById("loss-read").innerHTML =
+      `<span class="pill">L = <b>${batchLoss().toFixed(5)}</b> &nbsp;·&nbsp; steps: <b>${lossHist.length}</b></span>`;
+    planeFig.invalidate(); matsFig.invalidate(); lossFig.invalidate();
+  }
+
+  const trainer = player(() => { for (let i = 0; i < 8; i++) step(sLr.get()); refresh(); });
+  const btnTrain = document.getElementById("btn-train");
+  btnTrain.addEventListener("click", () => {
+    trainer.toggle();
+    btnTrain.textContent = trainer.running ? "⏸ pause" : "▶ train";
+  });
+  document.getElementById("btn-step").addEventListener("click", () => { step(sLr.get()); refresh(); });
+  document.getElementById("btn-reset").addEventListener("click", () => { init(); refresh(); });
+
+  init();
+  refresh();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PageRank — Random Surfer</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>PageRank — Random Surfer &amp; Power Iteration</h1>
+    <p class="sub">
+      Rank is liquid poured along out-links. Watch the mass meter: a dead end <em>leaks</em> it,
+      a spider trap <em>hoards</em> it, and teleportation fixes both. Yellow ticks mark the true eigenvector.
+    </p>
+    <p class="source">CS246 HW3.1–3.2 &nbsp;|&nbsp; r′ = βMr + (1−β)·𝟙/n, &nbsp;M column-stochastic ⇒ Σr conserved</p>
+  </header>
+
+  <div class="layout">
+    <div class="stack">
+      <div class="panel" id="graph-panel">
+        <h2>The web <span style="float:right" id="mass-read"></span></h2>
+        <canvas class="fig" id="web" style="height:400px"></canvas>
+        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center">
+          <button class="btn" data-world="core">healthy web</button>
+          <button class="btn" data-world="dead">+ dead end</button>
+          <button class="btn" data-world="trap">+ spider trap</button>
+          <span style="width:14px"></span>
+          <button class="btn primary" id="btn-step">step</button>
+          <button class="btn" id="btn-run">▶ run</button>
+          <button class="btn" id="btn-reset">reset</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Rank vector vs the eigenvector</h2>
+        <canvas class="fig" id="ranks" style="height:190px"></canvas>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <h2>Teleportation</h2>
+        <div id="s-beta"></div>
+        <label class="footnote" style="display:flex; align-items:center; gap:8px; margin-top:10px">
+          <input type="checkbox" id="teleport" checked>
+          use teleportation (the Google fix)
+        </label>
+        <p class="footnote" id="iter-read"></p>
+      </div>
+
+      <div class="panel">
+        <h2>What the meter is telling you</h2>
+        <p class="footnote" style="margin-top:0">
+          With no dead ends, every column of M sums to 1, so one step r′ = Mr just
+          <em>rearranges</em> the mass (his HW3 1(a) proof: swap the order of summation).
+          A dead end is a zero column — its rank pours out of the system entirely.
+          A spider trap conserves mass but never gives it back.
+          Teleportation redistributes (1−β) of everything uniformly each step:
+          the meter pins at 1 and no structure can capture the surfer.
+        </p>
+        <p class="footnote">
+          Convergence is geometric with rate ≈ β: lower β converges faster but
+          trusts the link structure less.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, fmt, makeFig, slider, player } = MM;
+
+  // mirrors core/sims/pagerank.py
+  const CORE_EDGES = [[0,1],[0,2],[1,2],[2,0],[2,3],[3,4],[4,0],[4,5],[5,0],[1,3],[3,1]];
+  const POS = {
+    0: [1.6, 2.6], 1: [3.6, 4.0], 2: [4.0, 1.6], 3: [6.2, 3.2],
+    4: [5.6, 0.6], 5: [2.6, 0.2], 6: [8.2, 1.4], 7: [9.4, 2.6],
+  };
+  let world = "core", edges = CORE_EDGES.slice(), N = 6;
+  let r, steps, history;
+
+  function setWorld(w) {
+    world = w;
+    if (w === "core") { edges = CORE_EDGES.slice(); N = 6; }
+    if (w === "dead") { edges = CORE_EDGES.concat([[2, 6], [4, 6]]); N = 7; }
+    if (w === "trap") { edges = CORE_EDGES.concat([[2, 6], [6, 7], [7, 6]]); N = 8; }
+    reset();
+  }
+  function reset() {
+    r = new Array(N).fill(1 / N);
+    steps = 0; history = [r.slice()];
+    refresh();
+  }
+  function linkStep(useTeleport, beta) {
+    const outDeg = new Array(N).fill(0);
+    for (const [a] of edges) outDeg[a]++;
+    const nr = new Array(N).fill(0);
+    for (const [a, b] of edges) nr[b] += r[a] / outDeg[a];
+    if (useTeleport) {
+      for (let i = 0; i < N; i++) nr[i] = beta * nr[i] + (1 - beta) / N;
+    }
+    r = nr; steps++;
+    history.push(r.slice());
+    if (history.length > 400) history.shift();
+  }
+  function eigRank(beta, useTeleport) {
+    // power-iterate a fresh copy to (near) fixed point as reference
+    let rr = new Array(N).fill(1 / N);
+    const outDeg = new Array(N).fill(0);
+    for (const [a] of edges) outDeg[a]++;
+    for (let t = 0; t < 800; t++) {
+      const nr = new Array(N).fill(0);
+      for (const [a, b] of edges) nr[b] += rr[a] / outDeg[a];
+      if (useTeleport) for (let i = 0; i < N; i++) nr[i] = beta * nr[i] + (1 - beta) / N;
+      rr = nr;
+    }
+    return rr;
+  }
+
+  const mass = () => r.reduce((a, b) => a + b, 0);
+  let beta = 0.85;
+  const useTeleport = () => document.getElementById("teleport").checked;
+
+  // ---------------------------------------------------------------- figures
+  const fig = makeFig(document.getElementById("web"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    const s = Math.min(w / 11, h / 5);
+    const px = (p) => [30 + p[0] * s, h - 30 - p[1] * s * 0.85];
+
+    // edges with arrowheads
+    for (const [a, b] of edges) {
+      const A = px(POS[a]), B = px(POS[b]);
+      const isTrap = (a >= 6 || b >= 6) && world === "trap";
+      const isDead = b === 6 && world === "dead";
+      ctx.strokeStyle = isTrap || isDead ? C.red : C.ink3;
+      ctx.lineWidth = 1.6;
+      const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy);
+      const ux = dx / L, uy = dy / L;
+      const rA = 14 + 60 * r[a], rB = 14 + 60 * r[b];
+      const x1 = A[0] + ux * rA, y1 = A[1] + uy * rA;
+      const x2 = B[0] - ux * (rB + 4), y2 = B[1] - uy * (rB + 4);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - ux * 7 - uy * 4, y2 - uy * 7 + ux * 4);
+      ctx.lineTo(x2 - ux * 7 + uy * 4, y2 - uy * 7 - ux * 4);
+      ctx.closePath(); ctx.fillStyle = ctx.strokeStyle; ctx.fill();
+    }
+    // nodes sized by rank
+    for (let i = 0; i < N; i++) {
+      const [X, Y] = px(POS[i]);
+      const rad = 14 + 60 * r[i];
+      const special = (i >= 6);
+      ctx.beginPath(); ctx.arc(X, Y, rad, 0, 7);
+      ctx.fillStyle = special && world !== "core"
+        ? "rgba(252,98,85,0.25)" : "rgba(88,196,221,0.22)";
+      ctx.fill();
+      ctx.strokeStyle = special && world !== "core" ? C.red : C.blue;
+      ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = C.ink;
+      ctx.font = "13px Times New Roman"; ctx.textAlign = "center";
+      ctx.fillText(r[i].toFixed(3), X, Y + 4);
+      ctx.fillStyle = C.ink3;
+      ctx.fillText(i === 6 && world === "dead" ? "sink" : "n" + i, X, Y - rad - 5);
+    }
+    ctx.textAlign = "left";
+  });
+
+  const ranksFig = makeFig(document.getElementById("ranks"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    const ref = eigRank(beta, useTeleport());
+    const bw = Math.min(54, (w - 80) / N - 14);
+    const x0 = 46, maxr = Math.max(...r, ...ref, 0.01);
+    for (let i = 0; i < N; i++) {
+      const X = x0 + i * (bw + 16);
+      const bh = (r[i] / maxr) * (h - 56);
+      ctx.fillStyle = C.teal;
+      ctx.fillRect(X, h - 24 - bh, bw, bh);
+      const th = (ref[i] / maxr) * (h - 56);
+      ctx.strokeStyle = C.yellow; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(X - 3, h - 24 - th); ctx.lineTo(X + bw + 3, h - 24 - th); ctx.stroke();
+      ctx.fillStyle = C.ink3; ctx.font = "12px Times New Roman";
+      ctx.fillText("n" + i, X + bw / 2 - 8, h - 8);
+    }
+    ctx.fillStyle = C.yellow;
+    ctx.font = "italic 13px Times New Roman";
+    ctx.fillText("yellow tick = fixed point (power-iterated to convergence)", x0, 16);
+  });
+
+  function refresh() {
+    const m = mass();
+    const el = document.getElementById("mass-read");
+    const ok = m > 0.9995;
+    el.innerHTML = `<span class="status ${ok ? "ok" : "bad"}">Σr = ${m.toFixed(4)} · step ${steps}</span>`;
+    // convergence readout
+    let note = "";
+    if (history.length >= 2) {
+      const a = history[history.length - 2], b = history[history.length - 1];
+      const delta = a.reduce((t, v, i) => t + Math.abs(b[i] - v), 0);
+      note = `last step ‖Δr‖₁ = ${delta.toExponential(2)} — geometric with rate ≈ β = ${fmt(beta, 2)}`;
+    }
+    document.getElementById("iter-read").textContent = note;
+    fig.invalidate(); ranksFig.invalidate();
+  }
+
+  // ---------------------------------------------------------------- wiring
+  for (const btn of document.querySelectorAll("[data-world]")) {
+    btn.addEventListener("click", () => setWorld(btn.dataset.world));
+  }
+  document.getElementById("btn-step").addEventListener("click", () => {
+    linkStep(useTeleport(), beta); refresh();
+  });
+  const runner = player(() => { linkStep(useTeleport(), beta); refresh(); });
+  const btnRun = document.getElementById("btn-run");
+  btnRun.addEventListener("click", () => {
+    runner.toggle();
+    btnRun.textContent = runner.running ? "⏸ pause" : "▶ run";
+  });
+  document.getElementById("btn-reset").addEventListener("click", reset);
+  document.getElementById("teleport").addEventListener("change", refresh);
+  slider({
+    el: "#s-beta", label: "β — follow-the-links probability", min: 0.5, max: 0.99,
+    step: 0.01, value: beta, format: (v) => fmt(v, 2),
+    onChange: (v) => { beta = v; refresh(); },
+  });
+
+  setWorld("core");
+})();
+</script>
+</body>
+</html>

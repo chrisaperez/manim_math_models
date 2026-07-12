@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ridge Bias–Variance</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>Ridge Regression — Buying Accuracy with Bias</h1>
+    <p class="sub">
+      Each dot is ŵ from one fresh noise draw. Slide λ: the cloud tightens (variance ↓)
+      while its center drifts off the bullseye (bias ↑). The MSE slope at λ = 0 is always
+      negative — some ridge always beats OLS.
+    </p>
+    <p class="source">CS229 PS2.2 &nbsp;|&nbsp; bias² = λ²Σ(vᵢᵀw*)²/(γᵢ+λ)², &nbsp;var = σ²Σγᵢ/(γᵢ+λ)²</p>
+  </header>
+
+  <div class="layout">
+    <div class="stack">
+      <div class="panel">
+        <h2>Estimator cloud in w-space <span style="float:right" id="cloud-read"></span></h2>
+        <canvas class="fig" id="cloud" style="height:380px"></canvas>
+        <div id="s-lam"></div>
+      </div>
+      <div class="panel">
+        <h2>The U-curve</h2>
+        <canvas class="fig" id="ucurve" style="height:220px"></canvas>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <h2>Problem shape</h2>
+        <div id="s-sigma"></div>
+        <div id="s-gamma"></div>
+        <button class="btn" id="btn-resample" style="margin-top:10px">resample the clouds</button>
+      </div>
+      <div class="panel">
+        <h2>Reading the picture</h2>
+        <p class="footnote" style="margin-top:0">
+          <span style="color:var(--green)">＋</span> is the truth w*;
+          <span style="color:var(--yellow)">×</span> is the average estimate E[ŵ].
+          Bias is the ×→＋ gap; variance is the scatter around ×.
+          OLS (λ=0) pins × on ＋ but pays σ²Σ1/γᵢ in scatter — brutal when the weak
+          eigenvalue γ<sub>min</sub> is small. Ridge shrinks exactly those weak directions
+          by γ/(γ+λ), trading a little aim for a lot of steadiness.
+        </p>
+        <p class="footnote" id="verdict"></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, clamp, fmt, makeFig, slider } = MM;
+
+  // problem: X^T X = diag(gmin, 8) in a rotated basis; w* fixed
+  let sigma = 0.8, gmin = 0.4, lam = 0;
+  const GMAX = 8, ANG = 0.5;
+  const WSTAR = [1.1, 0.8];
+  const ca = Math.cos(ANG), sa = Math.sin(ANG);
+  const V = [[ca, -sa], [sa, ca]];                 // eigenvectors as columns
+
+  // closed forms in the eigenbasis
+  const proj = () => [ca * WSTAR[0] + sa * WSTAR[1], -sa * WSTAR[0] + ca * WSTAR[1]];
+  function closedForm(l) {
+    const g = [gmin, GMAX], p = proj();
+    let b2 = 0, v = 0;
+    for (let i = 0; i < 2; i++) {
+      b2 += (l * p[i] / (g[i] + l)) ** 2;
+      v += sigma * sigma * g[i] / (g[i] + l) ** 2;
+    }
+    return { b2, v, mse: b2 + v };
+  }
+
+  // Monte Carlo cloud: what(lam) = V diag(g/(g+l)) V^T w* + V diag(sqrt(g)/(g+l)) V^T-ish noise
+  // Exact: in eigenbasis, c_hat_i = g p_i/(g+l) + sqrt(g) eps_i sigma/(g+l), eps ~ N(0,1)
+  let seed = 21;
+  function gauss() {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    const u1 = Math.max(seed / 2147483648, 1e-9);
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    const u2 = seed / 2147483648;
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  }
+  let noise = [];                                   // frozen eps per trial
+  function resample() {
+    noise = Array.from({ length: 90 }, () => [gauss(), gauss()]);
+    refresh();
+  }
+  function cloudPoints(l) {
+    const g = [gmin, GMAX], p = proj();
+    return noise.map((eps) => {
+      const c = [0, 1].map((i) =>
+        g[i] * p[i] / (g[i] + l) + Math.sqrt(g[i]) * sigma * eps[i] / (g[i] + l));
+      return [V[0][0] * c[0] + V[0][1] * c[1], V[1][0] * c[0] + V[1][1] * c[1]];
+    });
+  }
+
+  // ---------------------------------------------------------------- figures
+  const R = 2.6;
+  const cloudFig = makeFig(document.getElementById("cloud"), (ctx, W, H) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, W, H);
+    const s = Math.min(W, H) / (2 * R);
+    const px = (w) => [W / 2 + (w[0] - WSTAR[0]) * s, H / 2 - (w[1] - WSTAR[1]) * s];
+
+    const pts = cloudPoints(lam);
+    const mean = pts.reduce((m, p) => [m[0] + p[0] / pts.length, m[1] + p[1] / pts.length], [0, 0]);
+
+    ctx.fillStyle = "rgba(88,196,221,0.55)";
+    for (const p of pts) {
+      const [x, y] = px(p);
+      ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 7); ctx.fill();
+    }
+    // bullseye +
+    const [bx, by] = px(WSTAR);
+    ctx.strokeStyle = C.green; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(bx - 10, by); ctx.lineTo(bx + 10, by); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx, by - 10); ctx.lineTo(bx, by + 10); ctx.stroke();
+    // mean x
+    const [mx, my] = px(mean);
+    ctx.strokeStyle = C.yellow;
+    ctx.beginPath(); ctx.moveTo(mx - 8, my - 8); ctx.lineTo(mx + 8, my + 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(mx - 8, my + 8); ctx.lineTo(mx + 8, my - 8); ctx.stroke();
+    // bias segment
+    ctx.strokeStyle = C.ink3; ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(mx, my); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = C.green; ctx.font = "italic 14px Times New Roman";
+    ctx.fillText("w*", bx + 12, by - 10);
+    ctx.fillStyle = C.yellow;
+    ctx.fillText("E[ŵ]", mx + 10, my + 16);
+  });
+
+  const LMAX = 12;
+  const uFig = makeFig(document.getElementById("ucurve"), (ctx, W, H) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, W, H);
+    const pad = 40;
+    const N = 240;
+    const series = { b2: [], v: [], mse: [] };
+    let ymax = 0, best = { l: 0, m: Infinity };
+    for (let i = 0; i <= N; i++) {
+      const l = LMAX * i / N;
+      const cf = closedForm(l);
+      series.b2.push([l, cf.b2]); series.v.push([l, cf.v]); series.mse.push([l, cf.mse]);
+      ymax = Math.max(ymax, cf.mse);
+      if (cf.mse < best.m) best = { l, m: cf.mse };
+    }
+    ymax *= 1.06;
+    const xAt = (l) => pad + l / LMAX * (W - pad - 100);
+    const yAt = (v) => H - 26 - v / ymax * (H - 44);
+    for (const [key, col, tag] of [["b2", C.yellow, "bias²"], ["v", C.blue, "variance"], ["mse", C.red, "MSE"]]) {
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath();
+      series[key].forEach(([l, v], i) => { const p = [xAt(l), yAt(v)]; i ? ctx.lineTo(...p) : ctx.moveTo(...p); });
+      ctx.stroke();
+      ctx.fillStyle = col; ctx.font = "italic 13px Times New Roman";
+      ctx.fillText(tag, W - 92, yAt(series[key][N][1]) + 4);
+    }
+    // lambda* and current lambda
+    ctx.fillStyle = C.green;
+    ctx.beginPath(); ctx.arc(xAt(best.l), yAt(best.m), 5, 0, 7); ctx.fill();
+    ctx.fillText(`λ* = ${fmt(best.l, 2)}`, xAt(best.l) - 20, yAt(best.m) + 20);
+    ctx.strokeStyle = C.ink2; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(xAt(lam), yAt(0)); ctx.lineTo(xAt(lam), 12); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = C.ink3;
+    ctx.fillText("λ →", pad, H - 8);
+  });
+
+  // ---------------------------------------------------------------- wiring
+  function refresh() {
+    const cf = closedForm(lam);
+    document.getElementById("cloud-read").innerHTML =
+      `<span class="pill">λ = <b>${fmt(lam, 2)}</b> · bias² = <b>${fmt(cf.b2, 3)}</b> · var = <b>${fmt(cf.v, 3)}</b> · MSE = <b>${fmt(cf.mse, 3)}</b></span>`;
+    const ols = closedForm(0), eps = closedForm(1e-6);
+    const slope = (eps.mse - ols.mse) / 1e-6;
+    document.getElementById("verdict").innerHTML =
+      `Right now: OLS MSE = <b>${fmt(ols.mse, 3)}</b>, slope at λ=0 is <b style="color:${C.green}">${fmt(slope, 2)} &lt; 0</b> — ` +
+      `the curve always dips before it climbs (PS2.2(d)).`;
+    cloudFig.invalidate(); uFig.invalidate();
+  }
+
+  slider({
+    el: "#s-lam", label: "ridge penalty λ", min: 0, max: LMAX, step: 0.05, value: 0,
+    format: (v) => fmt(v, 2),
+    onChange: (v) => { lam = v; refresh(); },
+  });
+  slider({
+    el: "#s-sigma", label: "noise σ", min: 0.1, max: 2.0, step: 0.05, value: sigma,
+    format: (v) => fmt(v, 2),
+    onChange: (v) => { sigma = v; refresh(); },
+  });
+  slider({
+    el: "#s-gamma", label: "weak eigenvalue γmin (conditioning)", min: 0.05, max: 4,
+    step: 0.05, value: gmin, format: (v) => fmt(v, 2),
+    onChange: (v) => { gmin = v; refresh(); },
+  });
+  document.getElementById("btn-resample").addEventListener("click", resample);
+
+  resample();
+})();
+</script>
+</body>
+</html>

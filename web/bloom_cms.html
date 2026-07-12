@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bloom Filters &amp; Count-Min Sketch</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>Bloom Filters &amp; Count-Min Sketch</h1>
+    <p class="sub">
+      Type words into a live Bloom filter and watch bits light; query anything — zeros never lie,
+      but a full shadow will. Below, the same trick with counters: min over rows beats collision noise.
+    </p>
+    <p class="source">CS246 HW4.4 + streaming lectures &nbsp;|&nbsp; FP ≈ (1−e<sup>−kn/m</sup>)<sup>k</sup>, &nbsp;w=⌈e/ε⌉, d=⌈ln(1/δ)⌉ ⇒ P[ĉ &gt; c+εt] ≤ δ</p>
+  </header>
+
+  <div class="layout">
+    <div class="stack">
+      <div class="panel">
+        <h2>Bloom filter <span style="float:right" id="bloom-read"></span></h2>
+        <canvas class="fig" id="bits" style="height:120px"></canvas>
+        <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; align-items:center">
+          <input class="ti" id="word" placeholder="type a word…" size="16">
+          <button class="btn primary" id="btn-insert">insert</button>
+          <button class="btn" id="btn-query">query</button>
+          <button class="btn" id="btn-clear">clear</button>
+          <span id="verdict" style="font-size:15px"></span>
+        </div>
+        <div class="footnote" id="members">inserted: —</div>
+      </div>
+
+      <div class="panel">
+        <h2>False-positive rate: theory vs this very filter</h2>
+        <canvas class="fig" id="fpchart" style="height:200px"></canvas>
+        <div id="s-m"></div>
+        <div id="s-k"></div>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <h2>Count-min sketch <span style="float:right" id="cms-read"></span></h2>
+        <canvas class="fig" id="cms" style="height:190px"></canvas>
+        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center">
+          <button class="btn primary" id="btn-stream">stream 500 zipf items</button>
+          <button class="btn" id="btn-cms-reset">reset</button>
+        </div>
+        <div class="footnote" id="cms-table" style="margin-top:10px">stream something…</div>
+      </div>
+
+      <div class="panel">
+        <h2>The ε–δ dial</h2>
+        <div id="s-eps"></div>
+        <div id="s-delta"></div>
+        <p class="footnote" id="wd-read"></p>
+        <p class="footnote">
+          Width fights the <em>size</em> of collisions (each row's expected excess ≤ εt/e);
+          depth fights the <em>luck</em> of collisions (min over d independent rows;
+          all bad at once with probability ≤ e<sup>−d</sup> ≤ δ). Estimates never come in under
+          the truth — the lie is one-sided, just like the Bloom filter's.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  input.ti {
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--panel-edge); border-radius: 4px;
+    padding: 6px 10px; font-family: var(--font); font-size: 14.5px;
+  }
+</style>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, clamp, fmt, makeFig, slider, tooltip } = MM;
+
+  // FNV-1a with salt, mirrors the salted-hash idea in core/sims/sketches.py
+  function hash(s, salt, mod) {
+    let h = 2166136261 ^ salt * 16777619;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return ((h >>> 0) % mod + mod) % mod;
+  }
+
+  // ------------------------------------------------------------- bloom state
+  let m = 32, k = 3;
+  let bits = new Array(m).fill(false);
+  let members = [];
+  let lastQuery = null;   // {word, pos, verdict}
+
+  const positions = (w) => Array.from({ length: k }, (_, i) => hash(w, i + 1, m));
+  const insert = (w) => { positions(w).forEach((p) => bits[p] = true); members.push(w); };
+  const query = (w) => positions(w).every((p) => bits[p]);
+  const fpTheory = (n) => Math.pow(1 - Math.exp(-k * n / m), k);
+  function fpEmpirical(probes = 1200) {
+    let hits = 0;
+    for (let j = 0; j < probes; j++) if (query("§probe" + j)) hits++;
+    return hits / probes;
+  }
+
+  const bitsFig = makeFig(document.getElementById("bits"), (ctx, w_, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w_, h);
+    const cw = Math.min(30, (w_ - 20) / m);
+    const x0 = (w_ - cw * m) / 2, y0 = h / 2 - cw / 2;
+    for (let i = 0; i < m; i++) {
+      ctx.fillStyle = bits[i] ? C.yellow : C.panel;
+      ctx.globalAlpha = bits[i] ? 0.9 : 1;
+      ctx.fillRect(x0 + i * cw + 1, y0, cw - 2, cw);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = C.grid;
+      ctx.strokeRect(x0 + i * cw + 1, y0, cw - 2, cw);
+      ctx.fillStyle = bits[i] ? C.bg : C.ink3;
+      ctx.font = "12px Times New Roman"; ctx.textAlign = "center";
+      ctx.fillText(bits[i] ? "1" : "0", x0 + i * cw + cw / 2, y0 + cw / 2 + 4);
+    }
+    // arcs for the last query
+    if (lastQuery) {
+      ctx.strokeStyle = lastQuery.verdict ? C.green : C.red;
+      ctx.lineWidth = 1.6;
+      for (const p of lastQuery.pos) {
+        const tx = x0 + p * cw + cw / 2;
+        ctx.beginPath();
+        ctx.moveTo(w_ / 2, 10);
+        ctx.quadraticCurveTo((w_ / 2 + tx) / 2, -6, tx, y0 - 2);
+        ctx.stroke();
+      }
+    }
+    ctx.textAlign = "left";
+  });
+
+  const fpFig = makeFig(document.getElementById("fpchart"), (ctx, w_, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w_, h);
+    const NMAX = Math.max(12, members.length * 2 + 4);
+    const pad = 34;
+    const xAt = (n) => pad + (n / NMAX) * (w_ - pad - 120);
+    const yAt = (v) => h - 26 - v * (h - 46);
+    ctx.strokeStyle = C.grid;
+    [0, 0.5, 1].forEach((g) => {
+      ctx.beginPath(); ctx.moveTo(pad, yAt(g)); ctx.lineTo(w_ - 120, yAt(g)); ctx.stroke();
+      ctx.fillStyle = C.ink3; ctx.font = "11px Times New Roman";
+      ctx.fillText(g, 8, yAt(g) + 4);
+    });
+    ctx.strokeStyle = C.yellow; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let n = 0; n <= NMAX; n++) {
+      const p = [xAt(n), yAt(fpTheory(n))];
+      n ? ctx.lineTo(...p) : ctx.moveTo(...p);
+    }
+    ctx.stroke();
+    ctx.fillStyle = C.yellow;
+    ctx.font = "italic 13px Times New Roman";
+    ctx.fillText("theory (1−e^−kn/m)^k", w_ - 114, yAt(fpTheory(NMAX)) + 4);
+    // empirical dot at current n
+    const emp = fpEmpirical();
+    ctx.fillStyle = C.teal;
+    ctx.beginPath(); ctx.arc(xAt(members.length), yAt(emp), 5, 0, 7); ctx.fill();
+    ctx.fillText(`measured ${fmt(emp, 3)}`, xAt(members.length) + 8, yAt(emp) - 8);
+    ctx.fillStyle = C.ink3;
+    ctx.fillText("items inserted →", pad, h - 8);
+  });
+
+  function refreshBloom() {
+    document.getElementById("bloom-read").innerHTML =
+      `<span class="pill">m = <b>${m}</b> · k = <b>${k}</b> · n = <b>${members.length}</b> · k* = <b>${members.length ? fmt(m / members.length * Math.LN2, 1) : "—"}</b></span>`;
+    document.getElementById("members").textContent =
+      "inserted: " + (members.join(", ") || "—");
+    bitsFig.invalidate(); fpFig.invalidate();
+  }
+
+  const wordEl = document.getElementById("word");
+  document.getElementById("btn-insert").addEventListener("click", () => {
+    const w = wordEl.value.trim();
+    if (!w) return;
+    insert(w); lastQuery = null; wordEl.value = "";
+    document.getElementById("verdict").textContent = "";
+    refreshBloom();
+  });
+  document.getElementById("btn-query").addEventListener("click", () => {
+    const w = wordEl.value.trim();
+    if (!w) return;
+    const pos = positions(w), v = query(w);
+    lastQuery = { word: w, pos, verdict: v };
+    const isMember = members.includes(w);
+    const el = document.getElementById("verdict");
+    if (!v) { el.style.color = C.red; el.textContent = `"${w}" → NO (a zero never lies)`; }
+    else if (isMember) { el.style.color = C.green; el.textContent = `"${w}" → MAYBE (it is in)`; }
+    else { el.style.color = C.yellow; el.textContent = `"${w}" → MAYBE — false positive!`; }
+    refreshBloom();
+  });
+  document.getElementById("btn-clear").addEventListener("click", () => {
+    bits = new Array(m).fill(false); members = []; lastQuery = null;
+    document.getElementById("verdict").textContent = "";
+    refreshBloom();
+  });
+  slider({
+    el: "#s-m", label: "bits m", min: 8, max: 96, step: 8, value: 32,
+    format: (v) => v,
+    onChange: (v) => {
+      m = v; bits = new Array(m).fill(false); lastQuery = null;
+      members.slice().forEach((w) => positions(w).forEach((p) => bits[p] = true));
+      refreshBloom();
+    },
+  });
+  slider({
+    el: "#s-k", label: "hash functions k", min: 1, max: 8, step: 1, value: 3,
+    format: (v) => v,
+    onChange: (v) => {
+      k = v; bits = new Array(m).fill(false); lastQuery = null;
+      members.slice().forEach((w) => positions(w).forEach((p) => bits[p] = true));
+      refreshBloom();
+    },
+  });
+  ["cat", "dog", "svd"].forEach(insert);
+
+  // ------------------------------------------------------------- count-min
+  let eps = 0.15, delta = 0.15;
+  const params = () => [Math.ceil(Math.E / eps), Math.ceil(Math.log(1 / delta))];
+  let table, truth, streamed;
+  function cmsReset() {
+    const [w_, d] = params();
+    table = Array.from({ length: d }, () => new Array(w_).fill(0));
+    truth = {}; streamed = 0;
+  }
+  function cmsUpdate(item) {
+    const [w_, d] = params();
+    for (let j = 0; j < d; j++) table[j][hash(item, 100 + j, w_)] += 1;
+    truth[item] = (truth[item] || 0) + 1;
+    streamed++;
+  }
+  const cmsRows = (item) => {
+    const [w_, d] = params();
+    return Array.from({ length: d }, (_, j) => table[j][hash(item, 100 + j, w_)]);
+  };
+
+  let zseed = 9;
+  function zipfItem() {
+    zseed = (zseed * 1103515245 + 12345) % 2147483648;
+    const u = zseed / 2147483648;
+    const r = Math.min(60, Math.floor(Math.pow(1 - u, -1 / 0.9)));
+    return "item-" + r;
+  }
+
+  const cmsFig = makeFig(document.getElementById("cms"), (ctx, w_, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w_, h);
+    const [W, D] = params();
+    const cw = Math.min((w_ - 60) / W, (h - 30) / D, 26);
+    const x0 = 44, y0 = 12;
+    const vmax = Math.max(1, ...table.flat());
+    for (let j = 0; j < D; j++) {
+      ctx.fillStyle = C.teal; ctx.font = "italic 13px Times New Roman";
+      ctx.fillText("h" + (j + 1), 14, y0 + j * (cw + 3) + cw / 2 + 4);
+      for (let i = 0; i < W; i++) {
+        const v = table[j][i];
+        ctx.fillStyle = C.blue;
+        ctx.globalAlpha = v ? 0.15 + 0.75 * v / vmax : 0.04;
+        ctx.fillRect(x0 + i * (cw + 2), y0 + j * (cw + 3), cw, cw);
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.fillStyle = C.ink3;
+    ctx.font = "italic 12px Times New Roman";
+    ctx.fillText(`d = ${D} rows × w = ${W} counters — brightness = count`, x0, h - 6);
+  });
+
+  function refreshCms() {
+    const [w_, d] = params();
+    document.getElementById("cms-read").innerHTML =
+      `<span class="pill">t = <b>${streamed}</b> · ε = <b>${fmt(eps, 2)}</b> · δ = <b>${fmt(delta, 2)}</b></span>`;
+    document.getElementById("wd-read").innerHTML =
+      `w = ⌈e/ε⌉ = <b>${w_}</b>, &nbsp;d = ⌈ln(1/δ)⌉ = <b>${d}</b> &nbsp;→&nbsp; guarantee: ĉ ≤ c + ${fmt(eps, 2)}·t with prob ≥ ${fmt(1 - delta, 2)}`;
+    // top-item table with row estimates and min highlighted
+    const top = Object.entries(truth).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    if (top.length) {
+      let html = "<table style='width:100%; border-collapse:collapse; font-size:13.5px'>" +
+        "<tr style='color:var(--ink-3)'><td>item</td><td>true</td><td>row estimates</td><td>ĉ = min</td><td>excess</td></tr>";
+      for (const [it, c] of top) {
+        const rows = cmsRows(it);
+        const est = Math.min(...rows);
+        const cells = rows.map((r) =>
+          `<span style="color:${r === est ? C.green : C.ink3}">${r}</span>`).join(" · ");
+        const bad = est - c > eps * streamed;
+        html += `<tr><td>${it}</td><td>${c}</td><td>${cells}</td>` +
+          `<td style="color:${C.green}">${est}</td>` +
+          `<td style="color:${bad ? C.red : C.ink2}">+${est - c}${bad ? " ⚠" : ""}</td></tr>`;
+      }
+      document.getElementById("cms-table").innerHTML = html + "</table>";
+    }
+    cmsFig.invalidate();
+  }
+
+  document.getElementById("btn-stream").addEventListener("click", () => {
+    for (let i = 0; i < 500; i++) cmsUpdate(zipfItem());
+    refreshCms();
+  });
+  document.getElementById("btn-cms-reset").addEventListener("click", () => { cmsReset(); refreshCms(); });
+  slider({
+    el: "#s-eps", label: "ε (accuracy)", min: 0.02, max: 0.5, step: 0.01, value: eps,
+    format: (v) => fmt(v, 2),
+    onChange: (v) => { eps = v; cmsReset(); refreshCms(); },
+  });
+  slider({
+    el: "#s-delta", label: "δ (failure probability)", min: 0.02, max: 0.5, step: 0.01, value: delta,
+    format: (v) => fmt(v, 2),
+    onChange: (v) => { delta = v; cmsReset(); refreshCms(); },
+  });
+
+  cmsReset();
+  refreshBloom();
+  refreshCms();
+})();
+</script>
+</body>
+</html>

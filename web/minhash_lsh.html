@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MinHash &amp; LSH</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>MinHash &amp; LSH — Similarity at Scale</h1>
+    <p class="sub">
+      Edit the two shingle sets: minhash agreement <em>is</em> their Jaccard similarity,
+      estimated k permutations at a time. Then bend that linear estimator into a near-step
+      function with (r, b) banding.
+    </p>
+    <p class="source">CS246 HW1.3–1.4 &nbsp;|&nbsp; P[h<sub>min</sub>(A)=h<sub>min</sub>(B)] = J(A,B), &nbsp;P[candidate] = 1−(1−s<sup>r</sup>)<sup>b</sup></p>
+  </header>
+
+  <div class="layout" style="grid-template-columns: 1fr 1fr;">
+    <div class="panel">
+      <h2>MinHash estimator <span style="float:right" id="jac-read"></span></h2>
+      <div class="setrow"><span style="color:var(--teal)">A:</span> <span id="setA"></span>
+        <input class="ti" id="addA" placeholder="+shingle" size="8"></div>
+      <div class="setrow"><span style="color:var(--yellow)">B:</span> <span id="setB"></span>
+        <input class="ti" id="addB" placeholder="+shingle" size="8"></div>
+      <canvas class="fig" id="est" style="height:240px; margin-top:12px"></canvas>
+      <div id="s-perms"></div>
+      <p class="footnote">
+        Each of the k permutations is one independent coin with P(agree) = J.
+        The estimate ± band shows √(J(1−J)/k). HW1 3(c) footnote: the permutations must be
+        (near-)uniform — cyclic shifts alone provably miscount.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>Banding S-curve <span style="float:right" id="lsh-read"></span></h2>
+      <canvas class="fig" id="scurve" style="height:280px"></canvas>
+      <div id="s-r"></div>
+      <div id="s-b"></div>
+      <div id="s-target"></div>
+      <p class="footnote">
+        Shaded red left of the dashed line: false positives (dissimilar pairs that still collide).
+        Shaded blue right of it: false negatives (similar pairs missed). Tune r up to kill FPs,
+        b up to kill FNs — at constant r·b you pay the same signature length.
+      </p>
+    </div>
+  </div>
+</div>
+
+<style>
+  input.ti {
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--panel-edge); border-radius: 4px;
+    padding: 3px 8px; font-family: var(--font); font-size: 13.5px;
+  }
+  .setrow { margin: 6px 0; font-size: 15px; }
+  .chip {
+    display: inline-block; background: var(--bg); border: 1px solid var(--panel-edge);
+    border-radius: 999px; padding: 1px 10px; margin: 2px; cursor: pointer;
+    font-size: 13.5px;
+  }
+  .chip:hover { border-color: var(--red); text-decoration: line-through; }
+</style>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, clamp, fmt, makeFig, slider } = MM;
+
+  // ------------------------------------------------------------- sets & J
+  let A = new Set(["the cat", "cat sat", "sat on", "on mat"]);
+  let B = new Set(["sat on", "on mat", "mat today", "today ."]);
+  let k = 200;
+
+  const union = () => new Set([...A, ...B]);
+  const inter = () => new Set([...A].filter((x) => B.has(x)));
+  const jaccard = () => union().size ? inter().size / union().size : 0;
+
+  function hash(s, salt) {
+    let h = 2166136261 ^ salt * 2654435761;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  // agreement using k hash-permutations (min over salted hash = permutation min)
+  function agreementSeries(kmax) {
+    const u = [...union()];
+    let agree = 0;
+    const series = [];
+    for (let i = 1; i <= kmax; i++) {
+      let ma = Infinity, mb = Infinity;
+      for (const x of u) {
+        const h = hash(x, i);
+        if (A.has(x) && h < ma) ma = h;
+        if (B.has(x) && h < mb) mb = h;
+      }
+      agree += (ma === mb) ? 1 : 0;
+      series.push(agree / i);
+    }
+    return series;
+  }
+
+  const estFig = makeFig(document.getElementById("est"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    const j = jaccard();
+    const series = agreementSeries(k);
+    const pad = 40;
+    const xAt = (i) => pad + (i / (series.length - 1 || 1)) * (w - pad - 96);
+    const yAt = (v) => h - 24 - v * (h - 44);
+    // truth line + variance band
+    ctx.fillStyle = "rgba(255,211,90,0.12)";
+    for (let i = 4; i < series.length; i++) {
+      const se = Math.sqrt(Math.max(j * (1 - j), 1e-9) / (i + 1));
+      ctx.fillRect(xAt(i), yAt(j + 2 * se), xAt(i + 1) - xAt(i) + 1, yAt(j - 2 * se) - yAt(j + 2 * se));
+    }
+    ctx.strokeStyle = C.yellow; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(pad, yAt(j)); ctx.lineTo(w - 96, yAt(j)); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = C.yellow;
+    ctx.font = "italic 13px Times New Roman";
+    ctx.fillText(`J = ${fmt(j, 3)}`, w - 88, yAt(j) + 4);
+    // estimate trace
+    ctx.strokeStyle = C.teal; ctx.lineWidth = 2;
+    ctx.beginPath();
+    series.forEach((v, i) => { const p = [xAt(i), yAt(clamp(v, 0, 1))]; i ? ctx.lineTo(...p) : ctx.moveTo(...p); });
+    ctx.stroke();
+    ctx.fillStyle = C.teal;
+    ctx.fillText(`Ĵ = ${fmt(series[series.length - 1] || 0, 3)}`, w - 88, yAt(series[series.length - 1] || 0) - 8);
+    ctx.fillStyle = C.ink3;
+    ctx.fillText("running estimate over permutations →", pad, h - 8);
+    // axis labels
+    ctx.fillText("1", 26, yAt(1) + 4); ctx.fillText("0", 26, yAt(0) + 4);
+  });
+
+  function chipify() {
+    for (const [el, set, other] of [["setA", A, "A"], ["setB", B, "B"]]) {
+      const span = document.getElementById(el);
+      span.innerHTML = "";
+      for (const x of set) {
+        const c = document.createElement("span");
+        c.className = "chip"; c.textContent = x;
+        c.title = "click to remove";
+        c.addEventListener("click", () => { set.delete(x); refresh(); });
+        span.appendChild(c);
+      }
+    }
+  }
+  function refresh() {
+    const j = jaccard();
+    document.getElementById("jac-read").innerHTML =
+      `<span class="pill">|A∩B| = <b>${inter().size}</b> · |A∪B| = <b>${union().size}</b> · J = <b>${fmt(j, 3)}</b></span>`;
+    chipify();
+    estFig.invalidate();
+  }
+  for (const [inputId, set] of [["addA", A], ["addB", B]]) {
+    document.getElementById(inputId).addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.target.value.trim()) {
+        set.add(e.target.value.trim());
+        e.target.value = "";
+        refresh();
+      }
+    });
+  }
+  slider({
+    el: "#s-perms", label: "permutations k", min: 20, max: 2000, step: 20, value: k,
+    format: (v) => v,
+    onChange: (v) => { k = v; estFig.invalidate(); },
+  });
+
+  // ------------------------------------------------------------- S-curve
+  let r = 4, b = 16, target = 0.6;
+  const scurve = (s) => 1 - Math.pow(1 - Math.pow(s, r), b);
+  const threshold = () => Math.pow(1 / b, 1 / r);
+
+  const scFig = makeFig(document.getElementById("scurve"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    const pad = 42;
+    const xAt = (s) => pad + s * (w - pad - 20);
+    const yAt = (p) => h - 30 - p * (h - 52);
+    // FP / FN shading relative to the target similarity
+    for (let i = 0; i < 200; i++) {
+      const s = i / 200;
+      const p = scurve(s);
+      if (s < target && p > 0.005) {           // false positives
+        ctx.fillStyle = "rgba(252,98,85,0.25)";
+        ctx.fillRect(xAt(s), yAt(p), (w - pad - 20) / 200 + 1, yAt(0) - yAt(p));
+      }
+      if (s >= target && p < 0.995) {          // false negatives
+        ctx.fillStyle = "rgba(88,196,221,0.22)";
+        ctx.fillRect(xAt(s), yAt(1), (w - pad - 20) / 200 + 1, yAt(p) - yAt(1));
+      }
+    }
+    // curve
+    ctx.strokeStyle = C.yellow; ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    for (let i = 0; i <= 300; i++) {
+      const s = i / 300;
+      const p = [xAt(s), yAt(scurve(s))];
+      i ? ctx.lineTo(...p) : ctx.moveTo(...p);
+    }
+    ctx.stroke();
+    // target line + threshold dot
+    ctx.strokeStyle = C.ink2; ctx.setLineDash([4, 5]);
+    ctx.beginPath(); ctx.moveTo(xAt(target), yAt(0)); ctx.lineTo(xAt(target), yAt(1)); ctx.stroke();
+    ctx.setLineDash([]);
+    const t = threshold();
+    ctx.fillStyle = C.green;
+    ctx.beginPath(); ctx.arc(xAt(t), yAt(scurve(t)), 5, 0, 7); ctx.fill();
+    ctx.font = "italic 13px Times New Roman";
+    ctx.fillText(`s* = ${fmt(t, 2)}`, xAt(t) + 8, yAt(scurve(t)) - 6);
+    ctx.fillStyle = C.ink3;
+    ctx.fillText("0", pad - 14, yAt(0) + 4);
+    ctx.fillText("1", pad - 14, yAt(1) + 4);
+    ctx.fillText("similarity s →", pad, h - 8);
+    ctx.fillStyle = C.red; ctx.fillText("FP mass", xAt(target * 0.35), yAt(0.06));
+    ctx.fillStyle = C.blue; ctx.fillText("FN mass", xAt(Math.min(target + 0.06, 0.85)), yAt(0.94));
+  });
+
+  function refreshLsh() {
+    document.getElementById("lsh-read").innerHTML =
+      `<span class="pill">signature length r·b = <b>${r * b}</b> · s* = <b>${fmt(threshold(), 2)}</b> · P(${fmt(target, 2)}) = <b>${fmt(scurve(target), 3)}</b></span>`;
+    scFig.invalidate();
+  }
+  slider({
+    el: "#s-r", label: "rows per band r", min: 1, max: 16, step: 1, value: r,
+    format: (v) => v, onChange: (v) => { r = v; refreshLsh(); },
+  });
+  slider({
+    el: "#s-b", label: "bands b", min: 1, max: 64, step: 1, value: b,
+    format: (v) => v, onChange: (v) => { b = v; refreshLsh(); },
+  });
+  slider({
+    el: "#s-target", label: "target similarity", min: 0.05, max: 0.95, step: 0.01,
+    value: target, format: (v) => fmt(v, 2),
+    onChange: (v) => { target = v; refreshLsh(); },
+  });
+
+  refresh();
+  refreshLsh();
+})();
+</script>
+</body>
+</html>

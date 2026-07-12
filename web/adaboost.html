@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AdaBoost</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>AdaBoost — Failing Better Every Round</h1>
+    <p class="sub">
+      Boost one round at a time: the best stump appears, misclassified points inflate,
+      and yesterday's stump becomes an exact coin flip under the new weights.
+      The training error stays trapped beneath ΠZ<sub>t</sub> ≤ exp(−2Σγ²). Click to add your own points.
+    </p>
+    <p class="source">CS229 PS3.3–3.4 &nbsp;|&nbsp; α<sub>t</sub> = ½ln((1−ε<sub>t</sub>)/ε<sub>t</sub>), &nbsp;Z<sub>t</sub> = 2√(ε<sub>t</sub>(1−ε<sub>t</sub>))</p>
+  </header>
+
+  <div class="layout">
+    <div class="stack">
+      <div class="panel">
+        <h2>The committee floor <span style="float:right" id="round-read"></span></h2>
+        <canvas class="fig" id="floor" style="height:430px"></canvas>
+        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center">
+          <button class="btn primary" id="btn-boost">boost one round</button>
+          <button class="btn" id="btn-boost5">×5</button>
+          <button class="btn" id="btn-reset">reset weights</button>
+          <button class="btn" id="btn-data">new data</button>
+          <span style="width:10px"></span>
+          <span class="footnote" style="margin:0">add points:</span>
+          <button class="btn" id="mode-pos" style="color:var(--yellow)">■ +1</button>
+          <button class="btn" id="mode-neg" style="color:var(--blue)">● −1</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>The squeeze &nbsp;<span class="f">err ≤ ΠZ<sub>t</sub> ≤ e<sup>−2Σγ²</sup></span></h2>
+        <canvas class="fig" id="squeeze" style="height:200px"></canvas>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <h2>This round</h2>
+        <div id="round-info" class="footnote" style="margin-top:0">boost to begin.</div>
+      </div>
+      <div class="panel">
+        <h2>Why ½ln((1−ε)/ε)?</h2>
+        <p class="footnote" style="margin-top:0">
+          α<sub>t</sub> is exactly the value that makes the reweighted data
+          perfectly balanced for h<sub>t</sub>: the misclassified half and the correct half
+          each end up holding weight ½. That's why no stump is ever picked twice in a row —
+          it's already been priced in. Every α &gt; 0 as long as ε &lt; ½ (weak learnability),
+          and the exponential loss (1/n)Σe<sup>−y·f(x)</sup> telescopes to exactly ΠZ<sub>t</sub>.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, clamp, fmt, makeFig, tooltip } = MM;
+
+  // ------------------------------------------------------------- data/state
+  const R = 2.8;
+  let pts = [];        // {x, y, lab}
+  let w = [];          // weights
+  let rounds = [];     // {axis, thresh, sign, eps, alpha, z}
+  let hist = [];       // {err, prodZ, expB}
+  let addMode = 1;
+
+  function presetData() {
+    let seed = 3;
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5;
+    pts = [];
+    for (const [cx, cy, lab] of [[-1.6, 1.4, 1], [1.7, -1.3, 1], [1.6, 1.5, -1], [-1.7, -1.5, -1]]) {
+      for (let i = 0; i < 6; i++) pts.push({ x: cx + rand() * 1.1, y: cy + rand() * 1.1, lab });
+    }
+    resetWeights();
+  }
+  function resetWeights() {
+    w = new Array(pts.length).fill(1 / pts.length);
+    rounds = []; hist = [];
+    refresh();
+  }
+
+  const stumpPred = (st, p) => st.sign * ((st.axis === 0 ? p.x : p.y) > st.thresh ? 1 : -1);
+
+  function bestStump() {
+    let best = null, bestEps = Infinity;
+    for (const axis of [0, 1]) {
+      const vals = [...new Set(pts.map((p) => axis === 0 ? p.x : p.y))].sort((a, b) => a - b);
+      const cuts = [vals[0] - 1, ...vals.slice(0, -1).map((v, i) => (v + vals[i + 1]) / 2), vals[vals.length - 1] + 1];
+      for (const thresh of cuts) {
+        for (const sign of [1, -1]) {
+          let eps = 0;
+          pts.forEach((p, i) => { if (stumpPred({ axis, thresh, sign }, p) !== p.lab) eps += w[i]; });
+          if (eps < bestEps) { bestEps = eps; best = { axis, thresh, sign }; }
+        }
+      }
+    }
+    return { ...best, eps: bestEps };
+  }
+
+  function boost() {
+    if (pts.length < 4) return;
+    const st = bestStump();
+    const eps = clamp(st.eps, 1e-12, 1 - 1e-12);
+    const alpha = 0.5 * Math.log((1 - eps) / eps);
+    let z = 0;
+    const wn = pts.map((p, i) => {
+      const v = w[i] * Math.exp(-alpha * p.lab * stumpPred(st, p));
+      z += v; return v;
+    });
+    w = wn.map((v) => v / z);
+    rounds.push({ ...st, eps, alpha, z });
+    // history
+    const f = (p) => rounds.reduce((t, r) => t + r.alpha * stumpPred(r, p), 0);
+    const err = pts.filter((p) => Math.sign(f(p)) !== p.lab).length / pts.length;
+    const prodZ = (hist.length ? hist[hist.length - 1].prodZ : 1) * z;
+    const sg2 = rounds.reduce((t, r) => t + (0.5 - r.eps) ** 2, 0);
+    hist.push({ err, prodZ, expB: Math.exp(-2 * sg2) });
+    refresh();
+  }
+
+  // ------------------------------------------------------------- floor fig
+  const HIT = [];
+  const floorFig = makeFig(document.getElementById("floor"), (ctx, W, H) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, W, H);
+    HIT.length = 0;
+    const s = Math.min(W, H) / (2 * R);
+    const px = (x, y) => [W / 2 + x * s, H / 2 - y * s];
+
+    // committee heat
+    if (rounds.length) {
+      const G = 44;
+      for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) {
+        const x = -R + 2 * R * (i + 0.5) / G, y = -R + 2 * R * (j + 0.5) / G;
+        const f = rounds.reduce((t, r) => t + r.alpha * stumpPred(r, { x, y }), 0);
+        ctx.fillStyle = f > 0 ? C.yellow : C.blue;
+        ctx.globalAlpha = 0.20 * Math.min(Math.abs(f) / 1.2, 1);
+        const p = px(x, y);
+        ctx.fillRect(p[0] - R * s / G, p[1] - R * s / G, 2 * R * s / G + 1, 2 * R * s / G + 1);
+      }
+      ctx.globalAlpha = 1;
+      // latest stump line
+      const st = rounds[rounds.length - 1];
+      ctx.strokeStyle = C.ink; ctx.lineWidth = 2;
+      ctx.beginPath();
+      if (st.axis === 0) { ctx.moveTo(...px(st.thresh, -R)); ctx.lineTo(...px(st.thresh, R)); }
+      else { ctx.moveTo(...px(-R, st.thresh)); ctx.lineTo(...px(R, st.thresh)); }
+      ctx.stroke();
+    }
+    // faded older stumps
+    ctx.strokeStyle = C.ink3; ctx.lineWidth = 1;
+    for (const st of rounds.slice(0, -1)) {
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      if (st.axis === 0) { ctx.moveTo(...px(st.thresh, -R)); ctx.lineTo(...px(st.thresh, R)); }
+      else { ctx.moveTo(...px(-R, st.thresh)); ctx.lineTo(...px(R, st.thresh)); }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // points sized by weight
+    pts.forEach((p, i) => {
+      const r = 4 + 90 * Math.sqrt(w[i]) * Math.sqrt(1 / pts.length);
+      const [X, Y] = px(p.x, p.y);
+      if (p.lab > 0) {
+        ctx.fillStyle = "rgba(255,211,90,0.4)"; ctx.strokeStyle = C.yellow;
+        ctx.fillRect(X - r, Y - r, 2 * r, 2 * r); ctx.strokeRect(X - r, Y - r, 2 * r, 2 * r);
+      } else {
+        ctx.fillStyle = "rgba(88,196,221,0.4)"; ctx.strokeStyle = C.blue;
+        ctx.beginPath(); ctx.arc(X, Y, r, 0, 7); ctx.fill(); ctx.stroke();
+      }
+      HIT.push({ x: X, y: Y, i });
+    });
+  });
+
+  const tip = tooltip(document.getElementById("floor").parentElement);
+  document.getElementById("floor").addEventListener("pointermove", (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    const n = HIT.find((h) => (h.x - mx) ** 2 + (h.y - my) ** 2 < 200);
+    if (n) tip.show(mx, my, `w = ${w[n.i].toExponential(2)}`);
+    else tip.hide();
+  });
+  document.getElementById("floor").addEventListener("click", (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const s = Math.min(r.width, r.height) / (2 * R);
+    const x = (e.clientX - r.left - r.width / 2) / s;
+    const y = -(e.clientY - r.top - r.height / 2) / s;
+    if (Math.abs(x) > R || Math.abs(y) > R) return;
+    pts.push({ x, y, lab: addMode });
+    resetWeights();
+  });
+
+  // ------------------------------------------------------------- squeeze fig
+  const squeezeFig = makeFig(document.getElementById("squeeze"), (ctx, W, H) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, W, H);
+    if (!hist.length) {
+      ctx.fillStyle = C.ink3; ctx.font = "italic 13px Times New Roman";
+      ctx.fillText("the three curves appear as you boost", 14, H / 2);
+      return;
+    }
+    const T = hist.length;
+    const pad = 36;
+    const xAt = (t) => pad + (t / Math.max(T - 1, 1)) * (W - pad - 120);
+    const yAt = (v) => H - 24 - v * (H - 44);
+    const series = [
+      { k: "expB", col: C.teal, tag: "exp(−2Σγ²)" },
+      { k: "prodZ", col: C.yellow, tag: "Π Z_t" },
+      { k: "err", col: C.red, tag: "train error" },
+    ];
+    const ys = series.map((sr) => yAt(hist[T - 1][sr.k]));
+    for (let a = 0; a < 3; a++) for (let i = 1; i < 3; i++) {
+      if (Math.abs(ys[i] - ys[i - 1]) < 15) ys[i] = ys[i - 1] + 15;
+    }
+    series.forEach((sr, si) => {
+      ctx.strokeStyle = sr.col; ctx.lineWidth = 2;
+      ctx.beginPath();
+      hist.forEach((hh, t) => { const p = [xAt(t), yAt(hh[sr.k])]; t ? ctx.lineTo(...p) : ctx.moveTo(...p); });
+      ctx.stroke();
+      ctx.fillStyle = sr.col; ctx.font = "italic 13px Times New Roman";
+      ctx.fillText(`${sr.tag} (${fmt(hist[T - 1][sr.k], 3)})`, W - 114, ys[si] + 4);
+    });
+    ctx.fillStyle = C.ink3;
+    ctx.fillText("rounds →", pad, H - 8);
+  });
+
+  // ------------------------------------------------------------- wiring
+  function refresh() {
+    document.getElementById("round-read").innerHTML =
+      `<span class="pill">T = <b>${rounds.length}</b> · n = <b>${pts.length}</b>` +
+      (hist.length ? ` · err = <b>${fmt(hist[hist.length - 1].err, 3)}</b>` : "") + `</span>`;
+    if (rounds.length) {
+      const r = rounds[rounds.length - 1];
+      // verify the self-erasing property live
+      let eNew = 0;
+      pts.forEach((p, i) => { if (stumpPred(r, p) !== p.lab) eNew += w[i]; });
+      document.getElementById("round-info").innerHTML =
+        `stump: <b>${r.axis === 0 ? "x" : "y"} ${r.sign > 0 ? ">" : "≤"} ${fmt(r.thresh, 2)}</b><br>` +
+        `ε = <b style="color:${C.red}">${fmt(r.eps, 3)}</b>, α = <b style="color:${C.green}">${fmt(r.alpha, 3)}</b>, Z = ${fmt(r.z, 3)}<br><br>` +
+        `weighted error of this stump under the <em>new</em> weights: ` +
+        `<b style="color:${C.teal}">${fmt(eNew, 3)}</b> — priced in.`;
+    }
+    floorFig.invalidate(); squeezeFig.invalidate();
+  }
+
+  document.getElementById("btn-boost").addEventListener("click", boost);
+  document.getElementById("btn-boost5").addEventListener("click", () => { for (let i = 0; i < 5; i++) boost(); });
+  document.getElementById("btn-reset").addEventListener("click", resetWeights);
+  document.getElementById("btn-data").addEventListener("click", presetData);
+  document.getElementById("mode-pos").addEventListener("click", () => { addMode = 1; });
+  document.getElementById("mode-neg").addEventListener("click", () => { addMode = -1; });
+
+  presetData();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,285 @@
+/* Shared design system for all interactive demos: math-textbook feel —
+ * pure black page, Times-style serif type, hairline rules, restrained color.
+ *
+ * Brand note (dataviz): marks are deliberately bright on black. Series pairs
+ * are CVD-validated (teal/yellow ΔE 56.7 worst case, contrast >= 3:1);
+ * every series is direct-labeled, and red is reserved for status
+ * (divergence/failure), never used as a data series.
+ */
+
+:root {
+  --bg: #000000;
+  --panel: #0a0a0a;
+  --panel-edge: #2b2b2b;
+  --grid: #222222;
+  --ink: #f2f2ee;
+  --ink-2: #b3b3ac;
+  --ink-3: #78786f;
+  --blue: #58c4dd;
+  --teal: #5cd0b3;
+  --yellow: #ffd35a;
+  --green: #83c167;
+  --red: #fc6255;
+  --purple: #9a72ac;
+  --radius: 4px;
+  --font: "Times New Roman", "STIX Two Text", Georgia, serif;
+  --mono: "Times New Roman", Georgia, serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  line-height: 1.45;
+}
+
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 24px 64px;
+}
+
+header.demo h1 {
+  font-size: 28px;
+  margin: 0 0 4px;
+  letter-spacing: 0.2px;
+}
+
+header.demo .sub {
+  color: var(--ink-2);
+  font-size: 14.5px;
+  margin: 0 0 6px;
+}
+
+header.demo .source {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-style: italic;
+}
+
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 350px;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.panel h2 {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  margin: 0 0 10px;
+  border-bottom: 1px solid var(--panel-edge);
+  padding-bottom: 6px;
+}
+
+/* formulas inside headers keep their case */
+.panel h2 .f { font-variant: normal; letter-spacing: 0; font-style: italic; }
+
+.panel.alarm { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+
+canvas.fig { width: 100%; display: block; border-radius: 6px; }
+
+.stack > * + * { margin-top: 16px; }
+
+/* ---- controls ---- */
+
+.control { margin: 14px 0; }
+
+.control .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 14px;
+}
+
+.control .row .val {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.slider-wrap { position: relative; margin-top: 6px; }
+
+input[type="range"] {
+  width: 100%;
+  margin: 0;
+  appearance: none;
+  height: 26px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--grid);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ink);
+  margin-top: -6px;
+  border: none;
+}
+
+input[type="range"]:focus-visible { outline: 2px solid var(--blue); }
+
+.tick {
+  position: absolute;
+  top: 14px;
+  width: 2px;
+  height: 12px;
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+.tick-label {
+  position: absolute;
+  top: 26px;
+  transform: translateX(-50%);
+  font-size: 10.5px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ---- readouts & status ---- */
+
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.pill {
+  background: var(--bg);
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 12.5px;
+  font-family: var(--mono);
+  color: var(--ink-2);
+}
+
+.pill b { color: var(--ink); font-weight: 600; }
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 4px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.status::before { content: ""; width: 9px; height: 9px; border-radius: 50%; }
+.status.ok { background: rgba(131, 193, 103, 0.12); color: var(--green); }
+.status.ok::before { background: var(--green); }
+.status.bad { background: rgba(252, 98, 85, 0.14); color: var(--red); }
+.status.bad::before { background: var(--red); }
+
+.btn {
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--panel-edge);
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 13.5px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+
+.btn:hover { border-color: var(--ink-3); }
+.btn.primary { border-color: var(--blue); color: var(--blue); }
+
+/* ---- gauges ---- */
+
+.gauge { margin: 12px 0 20px; }
+
+.gauge .name { font-size: 13.5px; margin-bottom: 14px; }
+
+.gauge .rail {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--grid);
+}
+
+.gauge .zone {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  background: rgba(252, 98, 85, 0.15);
+  border-radius: 3px;
+}
+
+.gauge .mark {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 14px;
+  background: var(--ink-3);
+}
+
+.gauge .mark.danger { background: var(--red); }
+
+.gauge .dot {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: background 0.15s;
+}
+
+.gauge .scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  color: var(--ink-3);
+  margin-top: 6px;
+}
+
+/* ---- chart tooltip ---- */
+
+.tipbox {
+  position: absolute;
+  pointer-events: none;
+  background: #0d0d13;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--ink);
+  opacity: 0;
+  transition: opacity 0.08s;
+  z-index: 5;
+  white-space: nowrap;
+}
+
+.footnote { color: var(--ink-3); font-size: 12.5px; margin-top: 14px; }
+
+.math { font-family: "STIX Two Math", "Cambria Math", Georgia, serif; font-style: italic; }

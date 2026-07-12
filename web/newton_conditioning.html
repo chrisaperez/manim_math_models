@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Newton vs Gradient Descent</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>Newton vs Gradient Descent — Why Curvature Wins</h1>
+    <p class="sub">
+      Click anywhere on the contour plot to set a start point, then race the three methods.
+      On a quadratic, Newton lands in one step from <em>anywhere</em> — it optimizes in the
+      metric of the Hessian, where κ = 1.
+    </p>
+    <p class="source">CS205L HW7.4–7.5, HW8.1/8.4, HW9.5 &nbsp;|&nbsp; θ⁺ = θ − H⁻¹∇J; &nbsp;BFGS: B<sub>k+1</sub>s<sub>k</sub> = y<sub>k</sub></p>
+  </header>
+
+  <div class="layout">
+    <div class="stack">
+      <div class="panel">
+        <h2>The arena <span style="float:right" id="race-read"></span></h2>
+        <canvas class="fig" id="arena" style="height:420px"></canvas>
+        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center">
+          <button class="btn" data-obj="quad">quadratic canyon</button>
+          <button class="btn" data-obj="rosen">Rosenbrock</button>
+          <span style="width:10px"></span>
+          <button class="btn primary" id="btn-race">race!</button>
+          <label class="footnote" style="display:flex; align-items:center; gap:6px; margin:0">
+            <input type="checkbox" id="whiten"> whiten (Newton's view)
+          </label>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Loss vs iteration (log scale)</h2>
+        <canvas class="fig" id="race" style="height:200px"></canvas>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <h2>Quadratic shape</h2>
+        <div id="s-kappa"></div>
+        <div id="s-angle"></div>
+        <div id="s-alpha"></div>
+      </div>
+      <div class="panel">
+        <h2>Scoreboard</h2>
+        <div id="board" class="footnote" style="margin-top:0">click race!</div>
+      </div>
+      <div class="panel">
+        <h2>The cost ledger</h2>
+        <p class="footnote" style="margin-top:0">
+          GD: O(d) per step × O(κ·log 1/ε) steps.<br>
+          Newton: O(d³) per step (solve H d = −∇J) × O(1) steps near the optimum,
+          affine-invariant — rotating or stretching the problem changes nothing.<br>
+          BFGS: O(d²) per step, curvature learned from gradient differences via
+          the secant condition — the practical middle (HW8.4).
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  const { C, clamp, fmt, makeFig, slider, V2 } = MM;
+
+  // ------------------------------------------------------------- objectives
+  let obj = "quad", kappa = 30, angle = Math.PI / 6, alpha = 0.9;  // alpha as fraction of 2/(l1+l2)
+  let start = [-1.5, 1.6];
+  const LMAX = 4;
+
+  function quadParts() {
+    const l1 = LMAX / kappa, l2 = LMAX;
+    const Q = V2.rot(angle);
+    const Avv = (v) => { // A v with A = Q diag Q^T
+      const c = V2.mulT(Q, v);
+      return V2.mul(Q, [l1 * c[0], l2 * c[1]]);
+    };
+    return {
+      f: (v) => { const c = V2.mulT(Q, v); return 0.5 * (l1 * c[0] ** 2 + l2 * c[1] ** 2); },
+      grad: Avv,
+      newtonStep: (v) => [-v[0], -v[1]],                  // -A^{-1}(Av) = -v
+      alphaStar: 2 / (l1 + l2),
+      min: [0, 0],
+    };
+  }
+  function rosenParts() {
+    const f = (v) => (1 - v[0]) ** 2 + 100 * (v[1] - v[0] ** 2) ** 2;
+    const grad = (v) => [
+      -2 * (1 - v[0]) - 400 * v[0] * (v[1] - v[0] ** 2),
+      200 * (v[1] - v[0] ** 2),
+    ];
+    const hess = (v) => [
+      [2 - 400 * (v[1] - 3 * v[0] ** 2), -400 * v[0]],
+      [-400 * v[0], 200],
+    ];
+    return {
+      f, grad,
+      newtonStep: (v) => {
+        const H = hess(v), g = grad(v);
+        const det = H[0][0] * H[1][1] - H[0][1] * H[1][0];
+        return [-(H[1][1] * g[0] - H[0][1] * g[1]) / det,
+                -(-H[1][0] * g[0] + H[0][0] * g[1]) / det];
+      },
+      alphaStar: 1.2e-3,
+      min: [1, 1],
+    };
+  }
+  const parts = () => obj === "quad" ? quadParts() : rosenParts();
+
+  // ------------------------------------------------------------- optimizers
+  function runGD(P, x0, steps) {
+    let x = x0.slice(); const path = [x.slice()];
+    const a = P.alphaStar * (obj === "quad" ? alpha : 1);
+    for (let t = 0; t < steps; t++) {
+      const g = P.grad(x);
+      if (Math.hypot(...g) < 1e-8) break;
+      x = [x[0] - a * g[0], x[1] - a * g[1]];
+      path.push(x.slice());
+    }
+    return path;
+  }
+  function runNewton(P, x0, steps) {
+    let x = x0.slice(); const path = [x.slice()];
+    for (let t = 0; t < steps; t++) {
+      const g = P.grad(x);
+      if (Math.hypot(...g) < 1e-10) break;
+      let d = P.newtonStep(x), tt = 1;
+      while (P.f([x[0] + tt * d[0], x[1] + tt * d[1]]) >
+             P.f(x) + 1e-4 * tt * (g[0] * d[0] + g[1] * d[1]) && tt > 1e-8) tt /= 2;
+      x = [x[0] + tt * d[0], x[1] + tt * d[1]];
+      path.push(x.slice());
+    }
+    return path;
+  }
+  function runBFGS(P, x0, steps) {
+    let x = x0.slice(), H = [[1, 0], [0, 1]];
+    let g = P.grad(x);
+    const path = [x.slice()];
+    for (let t = 0; t < steps; t++) {
+      if (Math.hypot(...g) < 1e-8) break;
+      const d = [-(H[0][0] * g[0] + H[0][1] * g[1]), -(H[1][0] * g[0] + H[1][1] * g[1])];
+      let tt = 1;
+      while (P.f([x[0] + tt * d[0], x[1] + tt * d[1]]) >
+             P.f(x) + 1e-4 * tt * (g[0] * d[0] + g[1] * d[1]) && tt > 1e-12) tt /= 2;
+      const s = [tt * d[0], tt * d[1]];
+      const xn = [x[0] + s[0], x[1] + s[1]];
+      const gn = P.grad(xn);
+      const y = [gn[0] - g[0], gn[1] - g[1]];
+      const sy = s[0] * y[0] + s[1] * y[1];
+      if (sy > 1e-12) {
+        const rho = 1 / sy;
+        // H = (I - rho s y^T) H (I - rho y s^T) + rho s s^T
+        const A = [[1 - rho * s[0] * y[0], -rho * s[0] * y[1]],
+                   [-rho * s[1] * y[0], 1 - rho * s[1] * y[1]]];
+        const AH = [[A[0][0] * H[0][0] + A[0][1] * H[1][0], A[0][0] * H[0][1] + A[0][1] * H[1][1]],
+                    [A[1][0] * H[0][0] + A[1][1] * H[1][0], A[1][0] * H[0][1] + A[1][1] * H[1][1]]];
+        const AT = [[A[0][0], A[1][0]], [A[0][1], A[1][1]]];
+        H = [[AH[0][0] * AT[0][0] + AH[0][1] * AT[1][0] + rho * s[0] * s[0],
+              AH[0][0] * AT[0][1] + AH[0][1] * AT[1][1] + rho * s[0] * s[1]],
+             [AH[1][0] * AT[0][0] + AH[1][1] * AT[1][0] + rho * s[1] * s[0],
+              AH[1][0] * AT[0][1] + AH[1][1] * AT[1][1] + rho * s[1] * s[1]]];
+      }
+      x = xn; g = gn;
+      path.push(x.slice());
+    }
+    return path;
+  }
+
+  let results = null;
+
+  // ------------------------------------------------------------- arena
+  const R = 2.4;
+  const view = () => {
+    // display transform: identity, or A^{1/2} whitening for the quadratic
+    if (obj !== "quad" || !document.getElementById("whiten").checked) {
+      return (v) => v;
+    }
+    const l1 = Math.sqrt(LMAX / kappa), l2 = Math.sqrt(LMAX);
+    const Q = V2.rot(angle);
+    return (v) => {
+      const c = V2.mulT(Q, v);
+      return V2.mul(Q, [l1 * c[0] / Math.sqrt(LMAX), l2 * c[1] / Math.sqrt(LMAX)]);
+    };
+  };
+
+  const arena = makeFig(document.getElementById("arena"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    const P = parts();
+    const T = view();
+    const cx = obj === "quad" ? 0 : 0.2, cy = obj === "quad" ? 0 : 1;
+    const s = Math.min(w, h) / (2 * R);
+    const px = (v) => { const t = T([v[0] - cx, v[1] - cy]); return [w / 2 + t[0] * s, h / 2 - t[1] * s]; };
+
+    // loss glow backdrop (coarse grid)
+    const G = 90;
+    for (let i = 0; i < G; i++) {
+      for (let j = 0; j < G; j++) {
+        // invert display transform approximately by sampling world coords directly
+        const wx = cx + (-R + 2 * R * (i + 0.5) / G);
+        const wy = cy + (-R + 2 * R * (j + 0.5) / G);
+        const v = 1 / (1 + Math.log1p(P.f([wx, wy]))) ** 2;
+        ctx.fillStyle = `rgba(60,150,190,${v * 0.5})`;
+        const p = px([wx, wy]);
+        ctx.fillRect(p[0] - R * s / G, p[1] - R * s / G, 2 * R * s / G + 1, 2 * R * s / G + 1);
+      }
+    }
+    // minimum + start markers
+    const pm = px(P.min);
+    ctx.fillStyle = C.green;
+    ctx.beginPath(); ctx.arc(pm[0], pm[1], 5, 0, 7); ctx.fill();
+    const p0 = px(start);
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p0[0], p0[1], 7, 0, 7); ctx.stroke();
+    ctx.fillStyle = C.ink2;
+    ctx.font = "italic 13px Times New Roman";
+    ctx.fillText("start (click to move)", p0[0] + 10, p0[1] - 8);
+
+    // paths
+    if (results) {
+      const series = [
+        { path: results.gd, col: C.red, tag: "GD" },
+        { path: results.bfgs, col: C.yellow, tag: "BFGS" },
+        { path: results.newton, col: C.green, tag: "Newton" },
+      ];
+      for (const sr of series) {
+        ctx.strokeStyle = sr.col; ctx.lineWidth = 2;
+        ctx.beginPath();
+        sr.path.forEach((v, i) => { const p = px(v); i ? ctx.lineTo(...p) : ctx.moveTo(...p); });
+        ctx.stroke();
+        const end = px(sr.path[Math.min(sr.path.length - 1, 2)]);
+        ctx.fillStyle = sr.col;
+        ctx.fillText(sr.tag, end[0] + 6, end[1] - 6);
+      }
+    }
+  });
+
+  document.getElementById("arena").addEventListener("click", (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const s = Math.min(r.width, r.height) / (2 * R);
+    const cx = obj === "quad" ? 0 : 0.2, cy = obj === "quad" ? 0 : 1;
+    // clicks are interpreted in un-whitened coordinates for simplicity
+    start = [cx + (e.clientX - r.left - r.width / 2) / s,
+             cy - (e.clientY - r.top - r.height / 2) / s];
+    results = null;
+    race();
+  });
+
+  // ------------------------------------------------------------- race chart
+  const raceFig = makeFig(document.getElementById("race"), (ctx, w, h) => {
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h);
+    if (!results) return;
+    const P = parts();
+    const losses = (path) => path.map((v) => Math.max(P.f(v), 1e-14));
+    const series = [
+      { l: losses(results.gd), col: C.red, tag: "GD" },
+      { l: losses(results.bfgs), col: C.yellow, tag: "BFGS" },
+      { l: losses(results.newton), col: C.green, tag: "Newton" },
+    ];
+    const maxIter = Math.max(...series.map((s) => s.l.length));
+    const maxL = Math.max(...series.map((s) => s.l[0]));
+    const pad = 40;
+    const xAt = (i) => pad + (Math.log1p(i) / Math.log1p(maxIter)) * (w - pad - 80);
+    const yAt = (v) => 12 + (Math.log10(maxL) - Math.log10(v)) / (Math.log10(maxL) + 14) * (h - 36);
+    // spread end labels that would collide
+    const ys = series.map((sr) => yAt(sr.l[sr.l.length - 1]));
+    for (let a = 0; a < 3; a++) {
+      for (let i = 1; i < ys.length; i++) {
+        if (Math.abs(ys[i] - ys[i - 1]) < 15) ys[i] = ys[i - 1] + 15;
+      }
+    }
+    series.forEach((sr, si) => {
+      ctx.strokeStyle = sr.col; ctx.lineWidth = 2;
+      ctx.beginPath();
+      sr.l.forEach((v, i) => { const p = [xAt(i), yAt(v)]; i ? ctx.lineTo(...p) : ctx.moveTo(...p); });
+      ctx.stroke();
+      ctx.fillStyle = sr.col;
+      ctx.font = "italic 13px Times New Roman";
+      ctx.fillText(`${sr.tag} (${sr.l.length - 1})`, w - 74, ys[si] + 4);
+    });
+    ctx.fillStyle = C.ink3;
+    ctx.fillText("iteration (log spacing) →", pad, h - 6);
+  });
+
+  // ------------------------------------------------------------- wiring
+  function race() {
+    const P = parts();
+    results = {
+      gd: runGD(P, start, obj === "quad" ? 4000 : 30000),
+      newton: runNewton(P, start, 100),
+      bfgs: runBFGS(P, start, 400),
+    };
+    const dist = (p) => Math.hypot(p[p.length - 1][0] - P.min[0], p[p.length - 1][1] - P.min[1]);
+    document.getElementById("race-read").innerHTML =
+      `<span class="pill">GD <b>${results.gd.length - 1}</b> · BFGS <b>${results.bfgs.length - 1}</b> · Newton <b>${results.newton.length - 1}</b> steps</span>`;
+    document.getElementById("board").innerHTML =
+      `<table style="width:100%; font-size:13.5px"><tr style="color:var(--ink-3)"><td>method</td><td>steps</td><td>‖θ−θ*‖</td></tr>` +
+      `<tr><td style="color:${C.red}">GD (α${obj === "quad" ? " = " + fmt(alpha, 2) + "·α*" : " = 1.2e-3"})</td><td>${results.gd.length - 1}</td><td>${dist(results.gd).toExponential(1)}</td></tr>` +
+      `<tr><td style="color:${C.yellow}">BFGS</td><td>${results.bfgs.length - 1}</td><td>${dist(results.bfgs).toExponential(1)}</td></tr>` +
+      `<tr><td style="color:${C.green}">damped Newton</td><td>${results.newton.length - 1}</td><td>${dist(results.newton).toExponential(1)}</td></tr></table>` +
+      (obj === "quad" ? `<p>On the quadratic, undamped Newton is literally θ⁺ = θ − θ = 0: one step, any κ, any rotation.</p>` : "");
+    arena.invalidate(); raceFig.invalidate();
+  }
+
+  for (const btn of document.querySelectorAll("[data-obj]")) {
+    btn.addEventListener("click", () => {
+      obj = btn.dataset.obj;
+      start = obj === "quad" ? [-1.5, 1.6] : [-1.2, 1.0];
+      results = null;
+      race();
+    });
+  }
+  document.getElementById("btn-race").addEventListener("click", race);
+  document.getElementById("whiten").addEventListener("change", () => arena.invalidate());
+  slider({
+    el: "#s-kappa", label: "condition number κ (quadratic)", min: 2, max: 200, step: 1,
+    value: kappa, format: (v) => v,
+    onChange: (v) => { kappa = v; race(); },
+  });
+  slider({
+    el: "#s-angle", label: "rotation of the canyon", min: 0, max: 90, step: 1,
+    value: 30, format: (v) => v + "°",
+    onChange: (v) => { angle = v * Math.PI / 180; race(); },
+  });
+  slider({
+    el: "#s-alpha", label: "GD step as fraction of α*", min: 0.1, max: 1.0, step: 0.05,
+    value: alpha, format: (v) => fmt(v, 2),
+    onChange: (v) => { alpha = v; race(); },
+  });
+
+  race();
+})();
+</script>
+</body>
+</html>

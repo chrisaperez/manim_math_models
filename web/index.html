@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manim Math Models — Gallery</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+    gap: 18px;
+    margin-top: 20px;
+  }
+  .card h3 { margin: 0 0 2px; font-size: 19px; }
+  .card .src { color: var(--ink-3); font-size: 12.5px; font-style: italic; margin: 0 0 8px; }
+  .card p.blurb { color: var(--ink-2); font-size: 14px; margin: 8px 0 10px; }
+  .card video { width: 100%; border-radius: 5px; background: #000; display: block; }
+  .card .go {
+    display: inline-block; border: 1px solid var(--blue); color: var(--blue);
+    border-radius: 6px; padding: 5px 14px; font-size: 14px; margin-top: 2px;
+  }
+  .card .go:hover { background: rgba(88,196,221,0.08); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="demo">
+    <h1>Manim Math Models</h1>
+    <p class="sub">
+      The hardest ideas from CS229, CS246, and CS205L — each told twice from the same
+      pytest-verified numpy core: a cinematic video, and an interactive page you can push on.
+    </p>
+    <p class="source">Stanford W26 psets · manim CE + vanilla canvas · black &amp; serif, like the textbook it came from</p>
+  </header>
+
+  <div class="grid">
+
+    <div class="panel card">
+      <h3>1 · Gradient Descent &amp; the Curvature Cliff</h3>
+      <p class="src">CS229 PS1.1 · CS205L HW9.5</p>
+      <video controls preload="metadata" src="videos/gd_convergence.mp4"></video>
+      <p class="blurb">Every eigenmode contracts by (1−αλᵢ); the steep one hits −1 first,
+        so GD lives or dies by α &lt; 2/β<sub>max</sub>. Drag α past the cliff yourself.</p>
+      <a class="go" href="gd_convergence.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>2 · Backpropagation, Batched</h3>
+      <p class="src">CS229 PS2.4</p>
+      <video controls preload="metadata" src="videos/backprop_flow.mp4"></video>
+      <p class="blurb">∂L/∂X = (∂L/∂Z)Wᵀ and ∂L/∂W = Xᵀ(∂L/∂Z) — error clouds flowing
+        backward, rank-1 votes piling up, and a nudge test that audits the chain rule live.</p>
+      <a class="go" href="backprop_flow.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>3 · SVD vs PCA — One Decomposition, Two Stories</h3>
+      <p class="src">CS229 PS4.1 · CS246 HW2.1 · CS205L HW3</p>
+      <video controls preload="metadata" src="videos/svd_vs_pca.mp4"></video>
+      <p class="blurb">Kept + lost variance is pinned, so max-variance = min-error; and
+        MᵀM = VΣ²Vᵀ makes PCA's directions exactly the right singular vectors.</p>
+      <a class="go" href="svd_vs_pca.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>4 · GNN Message Passing &amp; the Depth Barrier</h3>
+      <p class="src">CS246 HW4.1</p>
+      <video controls preload="metadata" src="videos/gnn_depth.mp4"></video>
+      <p class="blurb">Two graphs, identical red-node embeddings — 1, 2, 6, 18 — until layer 4,
+        when the structural difference finally enters the receptive field. Rewire and re-test.</p>
+      <a class="go" href="gnn_depth.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>5 · Bloom Filters &amp; Count-Min Sketch</h3>
+      <p class="src">CS246 HW4.4 + streaming</p>
+      <video controls preload="metadata" src="videos/bloom_cms.mp4"></video>
+      <p class="blurb">Zeros never lie; collisions are calibrated: FP ≈ (1−e<sup>−kn/m</sup>)<sup>k</sup>.
+        Then counters + min-over-rows give the ε–δ guarantee from the pset.</p>
+      <a class="go" href="bloom_cms.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>6 · PageRank — Random Surfer &amp; Power Iteration</h3>
+      <p class="src">CS246 HW3.1–3.2</p>
+      <video controls preload="metadata" src="videos/pagerank.mp4"></video>
+      <p class="blurb">Rank as liquid: dead ends leak it, spider traps hoard it, teleportation
+        pins the meter at 1 and power iteration converges at rate β to the eigenvector.</p>
+      <a class="go" href="pagerank.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>7 · MinHash &amp; LSH — Similarity at Scale</h3>
+      <p class="src">CS246 HW1.3–1.4</p>
+      <video controls preload="metadata" src="videos/minhash_lsh.mp4"></video>
+      <p class="blurb">P[minhashes agree] = Jaccard, exactly — then banding bends that line
+        into a tunable S-curve step with threshold (1/b)<sup>1/r</sup>.</p>
+      <a class="go" href="minhash_lsh.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>8 · Newton vs Gradient Descent</h3>
+      <p class="src">CS205L HW7.4–7.5 · HW8.1/8.4 · HW9.5</p>
+      <video controls preload="metadata" src="videos/newton_conditioning.mp4"></video>
+      <p class="blurb">GD pays ~κ steps for bad conditioning; Newton un-squashes the space
+        (κ→1) and solves quadratics in one. Race GD, BFGS, and damped Newton anywhere.</p>
+      <a class="go" href="newton_conditioning.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>9 · AdaBoost — Failing Better Every Round</h3>
+      <p class="src">CS229 PS3.3–3.4</p>
+      <video controls preload="metadata" src="videos/adaboost.mp4"></video>
+      <p class="blurb">Misclassified points inflate, yesterday's stump becomes an exact coin
+        flip, and the training error is squeezed under ΠZ<sub>t</sub> ≤ exp(−2Σγ²).</p>
+      <a class="go" href="adaboost.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>10 · KL Divergence &amp; Maximum Likelihood</h3>
+      <p class="src">CS229 PS4.3</p>
+      <video controls preload="metadata" src="videos/kl_mle.mp4"></video>
+      <p class="blurb">Nonnegative by Jensen, additive over joints, direction-sensitive —
+        and the KL(P̂‖P<sub>θ</sub>) curve is the log-likelihood curve upside down:
+        fitting by ML <em>is</em> minimizing KL.</p>
+      <a class="go" href="kl_mle.html">open interactive →</a>
+    </div>
+
+    <div class="panel card">
+      <h3>11 · Ridge Regression — Buying Accuracy with Bias</h3>
+      <p class="src">CS229 PS2.2</p>
+      <video controls preload="metadata" src="videos/ridge.mp4"></video>
+      <p class="blurb">Clouds of estimates tighten and drift as λ grows; bias² + variance
+        makes a U-curve whose slope at λ = 0 is always negative — some ridge always helps.</p>
+      <a class="go" href="ridge.html">open interactive →</a>
+    </div>
+
+  </div>
+
+  <p class="footnote" style="margin-top:24px">
+    Every number on these pages traces back to <span class="f">core/sims/*.py</span>,
+    proven by <span class="f">pytest</span> before it was drawn — 66 tests: gradients vs finite
+    differences, divergence boundaries bisected, sketches Monte-Carlo'd, eigenvectors matched,
+    boosting bounds chained, KL curves mirrored, ridge clouds measured.
+  </p>
+</div>
+</body>
+</html>

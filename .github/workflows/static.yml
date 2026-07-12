@@ -27,12 +27,14 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      # This creates a clean folder and copies ONLY your web assets, skipping 'videos' completely
+      # This targets your web/ directory and safely leaves 'videos' behind
       - name: Stage Web Files
         run: |
           mkdir -p _site
-          cp *.html _site/ 2>/dev/null || true
-          if [ -d "assets" ]; then cp -r assets _site/; fi
+          # Copy all HTML files from web/ into the root of _site
+          cp web/*.html _site/
+          # Safely copy the assets folder if it exists inside web/
+          if [ -d "web/assets" ]; then cp -r web/assets _site/; fi
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

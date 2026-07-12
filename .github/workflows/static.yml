@@ -31,11 +31,15 @@ jobs:
       - name: Stage Web Files
         run: |
           mkdir -p _site
-          # Copy all HTML files from web/ into the root of _site
+          # 1. Copy HTML and assets
           cp web/*.html _site/
-          # Safely copy the assets folder if it exists inside web/
           if [ -d "web/assets" ]; then cp -r web/assets _site/; fi
-
+          
+          # 2. Build a fresh videos folder using the real files
+          mkdir -p _site/videos
+          # Find all .mp4 files (ignoring symlinks) and copy them to the live videos folder
+          find . -name "*.mp4" -type f -exec cp {} _site/videos/ \;
+    
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
